@@ -1,0 +1,58 @@
+[package]
+name = "mini-gzip"
+authors = ["Orbán Levente"]
+description = "A small gzip utility. Mainly for educational value."
+license = "Apache-2 OR MIT"
+repository = "https://www.github.com/levyry/mini-gzip"
+keywords = [
+    "compression",
+    "decompression",
+    "tool",
+    "utility",
+    "gzip",
+    "mini",
+    "educational",
+]
+categories = ["tools", "compression", "decompression"]
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# hopefully none
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+cargo = { level = "deny", priority = -1 }
+
+# Harden
+## Stops panics
+unwrap_used = "deny"
+expect_used = "deny"
+indexing_slicing = "deny"
+arithmetic_side_effects = "deny"
+unreachable = "deny"
+unimplemented = "deny"
+unchecked_time_subtraction = "deny"
+todo = "deny"
+string_slice = "deny"
+panic_in_result_fn = "deny"
+panic = "deny"
+exit = "deny"
+as_conversions = "deny"
+## Restrictions
+if_then_some_else_none = "deny"
+str_to_string = "deny"
+implicit_clone = "deny"
+try_err = "deny"
+undocumented_unsafe_blocks = "deny"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "deny"
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+opt-level = 3
