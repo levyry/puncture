@@ -1,7 +1,9 @@
 use std::{env, error::Error, path::Path};
 
+mod extraction;
 mod unzip;
 mod zip;
+mod bitreader;
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<String> = env::args().collect();
