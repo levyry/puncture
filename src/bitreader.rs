@@ -93,6 +93,29 @@ impl<R: BufRead> BitReader<R> {
 
         Ok(())
     }
+
+    /// Reads raw bytes exactly as they appear in the stream, preserving order.
+    /// Used for magic numbers, strings, and uncompressed block payloads.
+    pub fn read_raw_bytes(&mut self, buf: &mut [u8]) -> anyhow::Result<()> {
+        for byte in buf.iter_mut() {
+            if self.num_of_stored_bits >= 8 {
+                *byte = (self.bit_store & 0xFF)
+                    .try_into()
+                    .context("We masked for exactly 8 bits")?;
+
+                self.bit_store >>= 8;
+                self.num_of_stored_bits = self.num_of_stored_bits.saturating_sub(8);
+            } else {
+                let mut temp = [0u8; 1];
+                self.data
+                    .read_exact(&mut temp)
+                    .context("Hit EOF while reading raw bytes")?;
+                *byte = temp[0];
+            }
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]

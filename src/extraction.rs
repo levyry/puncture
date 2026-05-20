@@ -26,9 +26,11 @@ where
     pub fn process_header(mut self) -> anyhow::Result<Extraction<R, ProcessedHeader>> {
         let mut state = ProcessedHeader { file_name: None };
 
-        let magic: u16 = self.data.read_bytes(2)?;
-        if magic != 0x1F8B {
-            bail!("Incorrect magic: {magic}");
+        let mut magic = [0; 2];
+        self.data.read_raw_bytes(&mut magic)?;
+
+        if magic != [0x1F, 0x8B] {
+            bail!("Incorrect magic: {}{}", magic[0], magic[1]);
         }
 
         let cm: u8 = self.data.read_bytes(1)?;
@@ -43,7 +45,7 @@ where
         let fname = (flags & 0x8) == 8;
         let fcomment = (flags & 0x16) == 16;
 
-        if flags < 0x20 {
+        if flags >= 0x20 {
             bail!("Flag reserved bits aren't zeroed out: {flags}");
         }
 
@@ -58,9 +60,13 @@ where
 
         if fname {
             let mut name: Vec<u8> = vec![];
-            name.push(self.data.read_bytes(1)?);
+            let mut byte = [0; 1];
+            self.data.read_raw_bytes(&mut byte)?;
+            name.push(byte[0]);
             while name.last() != Some(&0x00) {
-                name.push(self.data.read_bytes(1)?);
+                let mut byte = [0; 1];
+                self.data.read_raw_bytes(&mut byte)?;
+                name.push(byte[0]);
             }
             state.file_name = Some(CString::from_vec_with_nul(name)?);
         }
@@ -106,9 +112,9 @@ where
             let btype: u8 = self.data.read_bits(2)?;
 
             match btype {
-                0b00 => self.uncompressed_data(output),
-                0b01 => self.fixed_huffman(output),
-                0b10 => self.dynamic_huffman(output),
+                0b00 => self.uncompressed_data(output)?,
+                0b01 => self.fixed_huffman(output)?,
+                0b10 => self.dynamic_huffman(output)?,
                 0b11 => bail!("Hit reserved Huffman btype header: 11"),
                 _ => unreachable!("We only read two bits"),
             }
@@ -121,9 +127,9 @@ where
         let btype: u16 = self.data.read_bits(2)?;
 
         match btype {
-            0b00 => self.uncompressed_data(output),
-            0b01 => self.fixed_huffman(output),
-            0b10 => self.dynamic_huffman(output),
+            0b00 => self.uncompressed_data(output)?,
+            0b01 => self.fixed_huffman(output)?,
+            0b10 => self.dynamic_huffman(output)?,
             0b11 => bail!("Hit reserved Huffman btype header: 11"),
             _ => unreachable!("We only read two bits"),
         }
@@ -139,15 +145,29 @@ where
         })
     }
 
-    fn uncompressed_data(&mut self, _output: &mut impl Write) {
+    fn uncompressed_data(&mut self, output: &mut impl Write) -> anyhow::Result<()> {
+        self.data.align_to_byte();
+        let len: u16 = self.data.read_bytes(2)?;
+        let nlen: u16 = self.data.read_bytes(2)?;
+
+        if !nlen != len {
+            bail!("Member nlen isn't one's complement of len. len: {len}, nlen: {nlen}");
+        }
+
+        let mut payload = vec![0u8; len.into()];
+
+        self.data.read_raw_bytes(&mut payload)?;
+
+        output.write_all(&payload)?;
+
+        Ok(())
+    }
+
+    fn fixed_huffman(&mut self, _output: &mut impl Write) -> anyhow::Result<()> {
         todo!()
     }
 
-    fn fixed_huffman(&mut self, _output: &mut impl Write) {
-        todo!()
-    }
-
-    fn dynamic_huffman(&mut self, _output: &mut impl Write) {
+    fn dynamic_huffman(&mut self, _output: &mut impl Write) -> anyhow::Result<()> {
         todo!()
     }
 
