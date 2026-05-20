@@ -1,90 +1,115 @@
-use std::io::{self, BufRead, Write};
+use std::{
+    ffi::CString,
+    io::{BufRead, Write},
+};
+
+use anyhow::bail;
 
 use crate::bitreader::BitReader;
 
-pub struct Extraction<'a, R: BufRead, W: Write> {
+pub struct Extraction<R, S> {
     data: BitReader<R>,
-    output: &'a mut W,
+    state: S,
 }
 
-impl<'a, R: BufRead, W: Write> Extraction<'a, R, W> {
-    pub const fn new(data: R, output: &'a mut W) -> Self {
+impl<R> Extraction<R, Start>
+where
+    R: BufRead,
+{
+    pub const fn new(data: R) -> Self {
         Self {
             data: BitReader::new(data),
-            output,
+            state: Start,
         }
     }
 
-    pub fn extract(&mut self) {
-        loop {
-            let _result = self.extract_member();
+    pub fn process_header(mut self) -> anyhow::Result<Extraction<R, ProcessedHeader>> {
+        let mut state = ProcessedHeader { file_name: None };
+
+        let magic: u16 = self.data.read_bytes(2)?;
+        if magic != 0x1F8B {
+            bail!("Incorrect magic: {magic}");
         }
-    }
 
-    fn extract_member(&mut self) -> io::Result<()> {
-        let magic = self.data.read_bytes(2)?;
-        assert!(magic == 0x1F8B, "Incorrect magic.");
+        let cm: u8 = self.data.read_bytes(1)?;
+        if cm != 0x8 {
+            bail!("Incorrect compression method: {cm}");
+        }
 
-        let cm = self.data.read_bytes(1)?;
-        assert!(cm == 0x8, "Incorrect compression method.");
+        let flags: u8 = self.data.read_bytes(1)?;
 
-        let flags = self.data.read_bytes(1)?;
+        let fhcrc = (flags & 0x2) == 2;
+        let fextra = (flags & 0x4) == 4;
+        let fname = (flags & 0x8) == 8;
+        let fcomment = (flags & 0x16) == 16;
 
-        let fhcrc = (flags & 0x2) == 1;
-        let fextra = (flags & 0x4) == 1;
-        let fname = (flags & 0x8) == 1;
-        let fcomment = (flags & 0x16) == 1;
-        assert!(flags < 0x20, "Flag reserved bits not 0.");
+        if flags < 0x20 {
+            bail!("Flag reserved bits aren't zeroed out: {flags}");
+        }
 
         // We skip MTIME, XFL and OS headers
-        let _skipped_header = self.data.read_bytes(4)?;
-        let _skipped_header = self.data.read_bytes(2)?;
+        let _mtime: u32 = self.data.read_bytes(4)?;
+        let _xfl_and_os: u16 = self.data.read_bytes(2)?;
 
         if fextra {
-            let xlen_bytes = self.data.read_bytes(2)?;
-            let _xlen: u16 = xlen_bytes.try_into().expect("We just read two bytes");
+            let xlen: u16 = self.data.read_bytes(2)?;
+            self.data.skip_bytes(xlen.into())?;
         }
 
         if fname {
-            let mut byte = self.data.read_bytes(1)?;
-            while byte != 0x00 {
-                byte = self.data.read_bytes(1)?;
+            let mut name: Vec<u8> = vec![];
+            name.push(self.data.read_bytes(1)?);
+            while name.last() != Some(&0x00) {
+                name.push(self.data.read_bytes(1)?);
             }
+            state.file_name = Some(CString::from_vec_with_nul(name)?);
         }
 
         if fcomment {
-            let mut byte = self.data.read_bytes(1)?;
+            let mut byte: u8 = self.data.read_bytes(1)?;
             while byte != 0x00 {
                 byte = self.data.read_bytes(1)?;
             }
         }
 
-        let _crc16: Option<u16> = if fhcrc {
-            let crc16_bytes = self.data.read_bytes(2)?;
-            Some(crc16_bytes.try_into().expect("We just read two bytes"))
+        // TODO: Currently, the crc16 field is ignored if it exists.
+        // I could calculate this, but then I would need to keep a
+        // seperate buffer for all the header fields I read in.
+        let mut _crc16: Option<u16> = if fhcrc {
+            Some(self.data.read_bytes(2)?)
         } else {
             None
         };
 
-        // Compressed blocks
-        let (crc32, isize) = self.deflate()?;
+        Ok(Extraction {
+            data: self.data,
+            state,
+        })
+    }
+}
 
-        self.check_crc32(crc32, isize);
-
-        Ok(())
+impl<R> Extraction<R, ProcessedHeader>
+where
+    R: BufRead,
+{
+    pub const fn get_file_name(&self) -> Option<&CString> {
+        self.state.file_name.as_ref()
     }
 
-    fn deflate(&mut self) -> io::Result<(u32, u32)> {
-        let mut bfinal = self.data.read_bits(1)?;
+    pub fn extract_into(
+        mut self,
+        output: &mut impl Write,
+    ) -> anyhow::Result<Extraction<R, Finish>> {
+        let mut bfinal: u8 = self.data.read_bits(1)?;
 
         while bfinal == 0 {
-            let btype = self.data.read_bits(2)?;
+            let btype: u8 = self.data.read_bits(2)?;
 
             match btype {
-                0b00 => self.uncompressed_data(),
-                0b01 => self.fixed_huffman(),
-                0b10 => self.dynamic_huffman(),
-                0b11 => panic!("Hit reserved huffman header"),
+                0b00 => self.uncompressed_data(output),
+                0b01 => self.fixed_huffman(output),
+                0b10 => self.dynamic_huffman(output),
+                0b11 => bail!("Hit reserved Huffman btype header: 11"),
                 _ => unreachable!("We only read two bits"),
             }
 
@@ -93,40 +118,36 @@ impl<'a, R: BufRead, W: Write> Extraction<'a, R, W> {
 
         // If the while breaks, that means the first bit of the deflate header
         // was set, so this is the last block for this member
-        let btype = self.data.read_bits(2)?;
+        let btype: u16 = self.data.read_bits(2)?;
 
         match btype {
-            0b00 => self.uncompressed_data(),
-            0b01 => self.fixed_huffman(),
-            0b10 => self.dynamic_huffman(),
-            0b11 => panic!("Hit reserved huffman header"),
+            0b00 => self.uncompressed_data(output),
+            0b01 => self.fixed_huffman(output),
+            0b10 => self.dynamic_huffman(output),
+            0b11 => bail!("Hit reserved Huffman btype header: 11"),
             _ => unreachable!("We only read two bits"),
         }
 
-        let crc32: u32 = self
-            .data
-            .read_bytes(4)?
-            .try_into()
-            .expect("We just read four bytes");
+        let crc32: u32 = self.data.read_bytes(4)?;
+        let isize: u32 = self.data.read_bytes(4)?;
 
-        let isize: u32 = self
-            .data
-            .read_bytes(4)?
-            .try_into()
-            .expect("We just read four bytes");
+        self.check_crc32(crc32, isize);
 
-        Ok((crc32, isize))
+        Ok(Extraction {
+            data: self.data,
+            state: Finish,
+        })
     }
 
-    fn uncompressed_data(&self) {
+    fn uncompressed_data(&mut self, _output: &mut impl Write) {
         todo!()
     }
 
-    fn fixed_huffman(&self) {
+    fn fixed_huffman(&mut self, _output: &mut impl Write) {
         todo!()
     }
 
-    fn dynamic_huffman(&self) {
+    fn dynamic_huffman(&mut self, _output: &mut impl Write) {
         todo!()
     }
 
@@ -134,3 +155,16 @@ impl<'a, R: BufRead, W: Write> Extraction<'a, R, W> {
         todo!()
     }
 }
+
+// State management stuff
+pub struct Start;
+pub struct ProcessedHeader {
+    file_name: Option<CString>,
+}
+pub struct Finish;
+
+#[allow(dead_code, reason = "This is only for the typestate pattern")]
+pub trait ExtractionState {}
+impl ExtractionState for Start {}
+impl ExtractionState for ProcessedHeader {}
+impl ExtractionState for Finish {}

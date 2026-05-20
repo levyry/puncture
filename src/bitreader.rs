@@ -1,12 +1,15 @@
-use std::io::Read;
+use std::io::BufRead;
 
+use anyhow::{Context, bail};
+
+/// A reader that can extract bits LSB first.
 pub struct BitReader<R> {
     data: R,
-    bit_store: u64,
+    bit_store: u128,
     num_of_stored_bits: u8,
 }
 
-impl<R: Read> BitReader<R> {
+impl<R: BufRead> BitReader<R> {
     pub const fn new(data: R) -> Self {
         Self {
             data,
@@ -15,49 +18,171 @@ impl<R: Read> BitReader<R> {
         }
     }
 
-    pub fn read_bits(&mut self, num_of_bits: u8) -> std::io::Result<u32> {
+    /// Read at most 64 bits at a time.
+    pub fn read_bits<T>(&mut self, num_of_bits: u8) -> anyhow::Result<T>
+    where
+        T: TryFrom<u128>,
+    {
         // Read until we have enough bits
         while self.num_of_stored_bits < num_of_bits {
-            let mut scratch = [0; 2];
+            let mut buf = [0; 1];
+            self.data
+                .read_exact(&mut buf)
+                .context("Hit EOF while filling buffer for requested bits")?;
 
-            self.data.read_exact(&mut scratch)?;
+            let scratch = u8::from_le_bytes(buf);
+            let scratch: u128 = scratch.into();
 
-            self.bit_store |= (scratch[0] as u64) << self.num_of_stored_bits;
-            self.num_of_stored_bits += 16;
+            self.bit_store |= scratch << self.num_of_stored_bits;
+            self.num_of_stored_bits = self
+                .num_of_stored_bits
+                .checked_add(8)
+                .context("Tried storing too many bits in BitReader")?;
         }
 
         // Get result
         let mask = (1 << num_of_bits) - 1;
-        let result = (self.bit_store & mask) as u32;
+        let result = (self.bit_store & mask)
+            .try_into()
+            .map_err(|_| unreachable!());
 
         // Clear out internal state
         self.bit_store >>= num_of_bits;
-        self.num_of_stored_bits -= num_of_bits;
+        self.num_of_stored_bits = self.num_of_stored_bits.saturating_sub(num_of_bits);
 
-        Ok(result)
+        result
     }
 
-    pub fn read_bytes(&mut self, num_of_bytes: u8) -> std::io::Result<u32> {
-        self.read_bits(num_of_bytes * 8)
+    /// Read at most 8 bytes at a time.
+    pub fn read_bytes<T>(&mut self, num_of_bytes: u8) -> anyhow::Result<T>
+    where
+        T: TryFrom<u128>,
+    {
+        let bits = num_of_bytes.saturating_mul(8);
+
+        if bits > 64 {
+            bail!("Tried getting too many bytes from BitReader");
+        }
+
+        self.read_bits(bits)
+    }
+
+    /// Discards any remaining bits in the current byte to align with the next
+    /// byte boundary.
+    #[inline]
+    pub const fn align_to_byte(&mut self) {
+        let leftover_bits = self.num_of_stored_bits % 8;
+        if leftover_bits > 0 {
+            self.bit_store >>= leftover_bits;
+            self.num_of_stored_bits = self.num_of_stored_bits.saturating_sub(leftover_bits);
+        }
+    }
+
+    /// Skip any number of bytes. The skipped bytes will be discarded.
+    pub fn skip_bytes(&mut self, num_of_bytes: u64) -> anyhow::Result<()> {
+        let cycles = num_of_bytes / 4;
+        let rem: u8 = (num_of_bytes % 4)
+            .try_into()
+            .context("Since x mod 4 can only be 0..=3, this will always fit in a u8,")?;
+
+        for _ in 0..cycles {
+            self.read_bits::<u32>(32)?;
+        }
+
+        self.read_bits::<u32>(rem.saturating_mul(8))?;
+
+        Ok(())
     }
 }
 
+#[cfg(test)]
 mod tests {
-    use std::io;
-
+    #![expect(clippy::panic_in_result_fn, reason = "Using assert in tests")]
     use super::*;
 
+    use std::io::Cursor;
+
+    fn create_reader(bytes: &[u8]) -> BitReader<Cursor<Vec<u8>>> {
+        BitReader::new(Cursor::new(bytes.to_vec()))
+    }
+
     #[test]
-    fn read_bits() -> io::Result<()> {
-        let input = vec![0b0011_0011, 0x34, 0x56];
-        let mut br = BitReader::new(input.as_slice());
+    fn test_read_basic_bits() -> anyhow::Result<()> {
+        // [0xCA] -> [1100_1010]
+        let mut br = create_reader(&[0b1100_1010]);
 
-        let bits = br.read_bits(3)?;
-        assert_eq!(bits, 0b00000_011);
+        let bits1: u8 = br.read_bits(4)?;
+        assert_eq!(bits1, 0b1010);
 
-        let bits = br.read_bits(3)?;
-        assert_eq!(bits, 0b00000_110);
+        let bits2: u8 = br.read_bits(4)?;
+        assert_eq!(bits2, 0b1100);
 
         Ok(())
+    }
+
+    #[test]
+    fn test_cross_byte_boundary() -> anyhow::Result<()> {
+        // [0x33, 0x55] -> [0011_0011, 0101_0101]
+        let mut br = create_reader(&[0x33, 0x55]);
+
+        // Combined LSB first: 0101_0011_0011 -> 0x533
+        let bits: u16 = br.read_bits(12)?;
+        assert_eq!(bits, 0x533);
+
+        let remaining: u8 = br.read_bits(4)?;
+        assert_eq!(remaining, 0b0101);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_align_to_byte() -> anyhow::Result<()> {
+        // [0xFF, 0xAA] -> [1111_1111, 1010_1010]
+        let mut br = create_reader(&[0xFF, 0xAA]);
+
+        let _: u8 = br.read_bits(3)?;
+        br.align_to_byte();
+
+        let next_byte: u8 = br.read_bits(8)?;
+        assert_eq!(next_byte, 0xAA);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_read_dynamic_bytes() -> anyhow::Result<()> {
+        let mut br = create_reader(&[0xAA, 0xBB, 0xCC, 0xDD]);
+
+        let val: u32 = br.read_bytes(3)?;
+        assert_eq!(val, 0xCC_BB_AA);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_skip_bytes() -> anyhow::Result<()> {
+        let mut br = create_reader(&[0x01, 0x02, 0x03, 0x04, 0x05, 0x06]);
+
+        let _: u8 = br.read_bytes(1)?;
+
+        br.skip_bytes(4)?;
+
+        let val: u8 = br.read_bytes(1)?;
+        assert_eq!(val, 0x06);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_eof_handling() {
+        let mut br = create_reader(&[0x01]);
+
+        let result: anyhow::Result<u16> = br.read_bits(16);
+
+        assert!(result.is_err());
+
+        if let Err(err_msg) = result {
+            assert!(err_msg.to_string().contains("EOF"));
+        }
     }
 }
