@@ -29,10 +29,6 @@ clap = { version = "4", default-features = false, features = [
 [dev-dependencies]
 criterion = "0.8"
 
-[[bench]]
-name = "writer_bench"
-harness = false
-
 [lints.clippy]
 pedantic = { level = "warn", priority = -1 }
 nursery = { level = "warn", priority = -1 }

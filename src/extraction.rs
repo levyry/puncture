@@ -29,6 +29,41 @@ const DISTANCE_OFFSET_BITS_TABLE: [u8; 30] = [
     13,
 ];
 
+/// A memory-packed Huffman symbol decoding lookup table.
+///
+///
+const HUFFMAN_DECODE_LUT: [u16; 512] = {
+    let mut table = [0u16; 512];
+
+    let mut raw_bits: usize = 0;
+
+    let mut reversed_bits: u16;
+
+    while raw_bits < 512 {
+        reversed_bits = (raw_bits as u16).reverse_bits() >> 7;
+
+        match reversed_bits {
+            0b0_00_00_00_00..=0b0_01_01_11_11 => {
+                table[raw_bits] = (7 << 9) | ((256 + (reversed_bits >> 2) - 0) as u16);
+            }
+            0b00_11_00_00_0..=0b10_11_11_11_1 => {
+                table[raw_bits] = (8 << 9) | ((0 + (reversed_bits >> 1) - 0b00_11_00_00) as u16);
+            }
+            0b11_00_00_00_0..=0b11_00_01_11_1 => {
+                table[raw_bits] = (8 << 9) | ((280 + (reversed_bits >> 1) - 0b11_00_00_00) as u16);
+            }
+            0b1_10_01_00_00..=0b1_11_11_11_11 => {
+                table[raw_bits] = (9 << 9) | ((144 + reversed_bits - 0b1_10_01_00_00) as u16);
+            }
+            _ => (),
+        }
+
+        raw_bits += 1;
+    }
+
+    table
+};
+
 #[derive(Debug)]
 pub struct Extractor<'a, R> {
     data: &'a mut BitReader<R>,
@@ -169,41 +204,13 @@ impl<'a, R: BufRead> Extractor<'a, R> {
 
     fn fixed_huffman<W: Write>(&mut self, output: &mut CachedWriter<W>) -> Result<()> {
         loop {
-            // decode literal/length value from input stream
-            let mut code: u16 = self.data.read_bits(7)?;
+            let symbol = self.decode_fixed_huffman()?;
 
-            code = code.reverse_bits() >> 9;
-
-            if code <= 0b0_01_01_11 {
-                code += 256;
-            } else {
-                let eight_bit: u16 = self.data.read_bits(1)?;
-                code <<= 1;
-                code |= eight_bit;
-
-                if (0b00_11_00_00..=0b10_11_11_11).contains(&code) {
-                    code -= 0b0_011_00_00;
-                    code += 0;
-                } else if (0b11_00_00_00..=0b11_00_01_11).contains(&code) {
-                    code -= 0b11_00_00_00;
-                    code += 280;
-                } else {
-                    let ninth_bit: u16 = self.data.read_bits(1)?;
-                    code <<= 1;
-                    code |= ninth_bit;
-
-                    if (0b1_10_01_00_00..=0b1_11_11_11_11).contains(&code) {
-                        code -= 0b1_10_01_00_00;
-                        code += 144;
-                    }
-                }
-            }
-
-            match code {
-                0..256 => output.write_all(&[code as u8])?,
+            match symbol {
+                0..256 => output.write_all(&[symbol as u8])?,
                 256 => break,
                 257..286 => {
-                    let length_index: usize = (code - 257).into();
+                    let length_index: usize = (symbol - 257).into();
 
                     let length_base = LENGTH_BASE_TABLE[length_index];
                     let length_offset_bits = LENGTH_OFFSET_BITS_TABLE[length_index];
@@ -226,11 +233,25 @@ impl<'a, R: BufRead> Extractor<'a, R> {
 
                     output.repeat_from(distance, length)?;
                 }
-                _ => bail!("The decoded symbol is wrong: {code}"),
+                _ => bail!("The decoded symbol is wrong: {symbol}"),
             }
         }
 
         Ok(())
+    }
+
+    #[inline(always)]
+    fn decode_fixed_huffman(&mut self) -> Result<u16> {
+        let code: usize = self.data.peek_bits(9)?;
+
+        let packed_result = HUFFMAN_DECODE_LUT[code & 511];
+
+        let symbol = packed_result & ((1 << 9) - 1);
+        let bit_length = (packed_result >> 9) as u8;
+
+        self.data.advance_bits_unchecked(bit_length)?;
+
+        Ok(symbol)
     }
 
     fn dynamic_huffman(&mut self, _output: &mut impl Write) -> Result<()> {

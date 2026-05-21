@@ -40,7 +40,7 @@ impl<W: Write> Crc32<W> {
     }
 
     #[expect(clippy::indexing_slicing, clippy::as_conversions)]
-    fn update(&mut self, buf: &[u8]) {
+    fn update_crc32(&mut self, buf: &[u8]) {
         for &byte in buf {
             let index_stub = self.state ^ u32::from(byte);
             let index = index_stub as usize & 0xFF;
@@ -59,7 +59,7 @@ impl<W: Write> Crc32<W> {
 
 impl<W: Write> Write for Crc32<W> {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.update(buf);
+        self.update_crc32(buf);
         self.isize = self
             .isize
             .wrapping_add(buf.len().try_into().expect("u32 couldn't fit in usize"));
