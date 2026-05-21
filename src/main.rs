@@ -7,12 +7,7 @@ use std::{
 use anyhow::{Context, Result};
 use clap::{Arg, ArgAction, ArgMatches, Command};
 
-use crate::{bitreader::BitReader, extraction::Extractor};
-
-mod bitreader;
-mod cached_writer;
-mod crc32;
-mod extraction;
+use puncture::{bitreader::BitReader, extraction::Extractor};
 
 fn main() -> Result<(), anyhow::Error> {
     let args = get_cli_args()?;
@@ -55,7 +50,7 @@ fn get_output_stream(
     Ok(if print_to_stdout {
         Box::new(BufWriter::new(std::io::stdout()))
     } else if let Some(requested_file_name) = cli_output {
-        Box::new(BufWriter::new(File::create_new(requested_file_name)?))
+        Box::new(BufWriter::new(File::create(requested_file_name)?))
     } else if let Some(original_file_name) = extractor.get_file_name() {
         let name = original_file_name.clone().into_string()?;
         Box::new(BufWriter::new(File::create_new(name)?))
