@@ -1,6 +1,7 @@
 const CRC32_TABLE: [u32; 256] = Crc32::make_crc_table();
+const POLYNOMIAL: u32 = 0xED_B8_83_20;
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug)]
 pub struct Crc32 {
     state: u32,
 }
@@ -20,7 +21,7 @@ impl Crc32 {
             let mut k: u8 = 0;
             while k < 8 {
                 if (c & 1) == 1 {
-                    c = 0xED_B8_83_20 ^ (c >> 1);
+                    c = POLYNOMIAL ^ (c >> 1);
                 } else {
                     c >>= 1;
                 }
@@ -33,9 +34,7 @@ impl Crc32 {
     }
 
     pub const fn new() -> Self {
-        Self {
-            state: 0xFF_FF_FF_FF,
-        }
+        Self { state: u32::MAX }
     }
 
     #[expect(
@@ -54,12 +53,6 @@ impl Crc32 {
     }
 
     pub const fn finalize(&self) -> u32 {
-        self.state ^ 0xFF_FF_FF_FF
-    }
-}
-
-impl Default for Crc32 {
-    fn default() -> Self {
-        Self::new()
+        self.state ^ u32::MAX
     }
 }

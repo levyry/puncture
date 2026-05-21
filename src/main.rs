@@ -7,7 +7,7 @@ use std::{
 use anyhow::{Context, Result};
 use clap::{Arg, ArgAction, ArgMatches, Command};
 
-use crate::{bitreader::BitReader, extraction::Extraction};
+use crate::{bitreader::BitReader, extraction::Extractor};
 
 mod bitreader;
 mod crc32;
@@ -33,7 +33,7 @@ fn main() -> Result<(), anyhow::Error> {
 
     if is_extract {
         let mut br = BitReader::new(input_stream);
-        let mut ext = Extraction::new(&mut br);
+        let mut ext = Extractor::new(&mut br);
 
         ext.process_header()?;
 
@@ -48,12 +48,12 @@ fn main() -> Result<(), anyhow::Error> {
 fn get_output_stream(
     print_to_stdout: bool,
     cli_input: Option<&String>,
-    cli_ouput: Option<&String>,
-    extractor: &Extraction<'_, impl BufRead>,
+    cli_output: Option<&String>,
+    extractor: &Extractor<'_, impl BufRead>,
 ) -> Result<Box<dyn Write>> {
     Ok(if print_to_stdout {
         Box::new(BufWriter::new(std::io::stdout()))
-    } else if let Some(requested_file_name) = cli_ouput {
+    } else if let Some(requested_file_name) = cli_output {
         Box::new(BufWriter::new(File::create_new(requested_file_name)?))
     } else if let Some(original_file_name) = extractor.get_file_name() {
         let name = original_file_name.clone().into_string()?;
@@ -75,9 +75,8 @@ fn get_output_stream(
 
 fn get_cli_args() -> Result<ArgMatches> {
     let mut cmd = Command::new("mini-gzip")
-        .version("v0.1.0")
+        .version("0.1.0")
         .about("Compress or uncompress files using the gzip format.")
-        .arg_required_else_help(true)
         .arg(
             Arg::new("extract")
                 .short('e')
@@ -115,6 +114,10 @@ fn get_cli_args() -> Result<ArgMatches> {
 
     if std::env::args().len() == 1 && std::io::stdin().is_terminal() {
         cmd.print_help()?;
+        #[expect(
+            clippy::exit,
+            reason = "This function is only called at the beginning of main"
+        )]
         std::process::exit(0);
     }
 

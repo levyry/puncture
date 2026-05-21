@@ -3,6 +3,7 @@ use std::io::BufRead;
 use anyhow::{Context, Result, bail};
 
 /// A reader that can extract bits LSB first.
+#[derive(Debug)]
 pub struct BitReader<R> {
     data: R,
     bit_store: u128,
@@ -30,8 +31,7 @@ impl<R: BufRead> BitReader<R> {
                 .read_exact(&mut buf)
                 .context("Hit EOF while filling buffer for requested bits")?;
 
-            let scratch = u8::from_le_bytes(buf);
-            let scratch: u128 = scratch.into();
+            let scratch: u128 = buf[0].into();
 
             self.bit_store |= scratch << self.num_of_stored_bits;
             self.num_of_stored_bits = self
@@ -81,17 +81,9 @@ impl<R: BufRead> BitReader<R> {
 
     /// Skip any number of bytes. The skipped bytes will be discarded.
     pub fn skip_bytes(&mut self, num_of_bytes: u64) -> Result<()> {
-        let cycles = num_of_bytes / 4;
-        let rem: u8 = (num_of_bytes % 4)
-            .try_into()
-            .context("Since x mod 4 can only be 0..=3, this will always fit in a u8,")?;
-
-        for _ in 0..cycles {
-            self.read_bits::<u32>(32)?;
+        for _ in 0..num_of_bytes {
+            self.read_bits::<u8>(8)?;
         }
-
-        self.read_bits::<u32>(rem.saturating_mul(8))?;
-
         Ok(())
     }
 
