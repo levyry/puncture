@@ -1,58 +1,72 @@
-const CRC32_TABLE: [u32; 256] = Crc32::make_crc_table();
+use std::io::Write;
+
+#[expect(clippy::indexing_slicing, clippy::as_conversions)]
+const CRC32_TABLE: [u32; 256] = {
+    let mut table = [0u32; 256];
+    let mut n: u32 = 0;
+    while n < 256 {
+        let mut c = n;
+        let mut k: u8 = 0;
+        while k < 8 {
+            if (c & 1) == 1 {
+                c = POLYNOMIAL ^ (c >> 1);
+            } else {
+                c >>= 1;
+            }
+            k = k.saturating_add(1);
+        }
+        table[n as usize] = c;
+        n = n.saturating_add(1);
+    }
+    table
+};
+
 const POLYNOMIAL: u32 = 0xED_B8_83_20;
 
 #[derive(Debug)]
-pub struct Crc32 {
+pub struct Crc32<W> {
+    stream: W,
     state: u32,
+    isize: u32,
 }
 
-impl Crc32 {
-    #[expect(clippy::indexing_slicing, reason = "n is kept < 256 by the while loop")]
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "n is kept < 256 by the while loop"
-    )]
-    #[expect(clippy::as_conversions, reason = "n is kept < 256 by the while loop")]
-    const fn make_crc_table() -> [u32; 256] {
-        let mut table = [0u32; 256];
-        let mut n: usize = 0;
-        while n < 256 {
-            let mut c = n as u32;
-            let mut k: u8 = 0;
-            while k < 8 {
-                if (c & 1) == 1 {
-                    c = POLYNOMIAL ^ (c >> 1);
-                } else {
-                    c >>= 1;
-                }
-                k = k.saturating_add(1);
-            }
-            table[n] = c;
-            n = n.saturating_add(1);
+impl<W: Write> Crc32<W> {
+    pub const fn new(stream: W) -> Self {
+        Self {
+            state: u32::MAX,
+            stream,
+            isize: 0,
         }
-        table
     }
 
-    pub const fn new() -> Self {
-        Self { state: u32::MAX }
-    }
-
-    #[expect(
-        clippy::as_conversions,
-        reason = "the as casts here only pad with zeros"
-    )]
-    #[expect(
-        clippy::indexing_slicing,
-        reason = "Bottom 8 bits of `byte` are masked"
-    )]
-    pub fn update(&mut self, buf: &[u8]) {
+    #[expect(clippy::indexing_slicing, clippy::as_conversions)]
+    fn update(&mut self, buf: &[u8]) {
         for &byte in buf {
-            let index = ((self.state ^ (u32::from(byte))) & 0xFF) as usize;
+            let index_stub = self.state ^ u32::from(byte);
+            let index = index_stub as usize & 0xFF;
             self.state = (self.state >> 8) ^ CRC32_TABLE[index];
         }
     }
 
-    pub const fn finalize(&self) -> u32 {
+    const fn finalize(&self) -> u32 {
         self.state ^ u32::MAX
+    }
+
+    pub const fn get_hashes(&self) -> (u32, u32) {
+        (self.finalize(), self.isize)
+    }
+}
+
+impl<W: Write> Write for Crc32<W> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.update(buf);
+        self.isize = self
+            .isize
+            .wrapping_add(buf.len().try_into().expect("u32 couldn't fit in usize"));
+        self.stream.write(buf)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.stream.flush()
     }
 }

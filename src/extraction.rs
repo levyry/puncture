@@ -3,7 +3,7 @@ use std::{
     io::{BufRead, Write},
 };
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 
 use crate::{bitreader::BitReader, cached_writer::CachedWriter, crc32::Crc32};
 
@@ -14,8 +14,6 @@ const CM_DEFLATE: u8 = 8;
 pub struct Extractor<'a, R> {
     data: &'a mut BitReader<R>,
     file_name: Option<CString>,
-    running_crc32: Crc32,
-    running_isize: u32,
 }
 
 impl<'a, R: BufRead> Extractor<'a, R> {
@@ -23,8 +21,6 @@ impl<'a, R: BufRead> Extractor<'a, R> {
         Self {
             data,
             file_name: None,
-            running_crc32: Crc32::new(),
-            running_isize: 0,
         }
     }
 
@@ -89,7 +85,12 @@ impl<'a, R: BufRead> Extractor<'a, R> {
     }
 
     pub fn deflate(mut self, output: &mut impl Write) -> Result<()> {
+        // To track the CRC-32 hash, we wrap the output stream
+        let output = Crc32::new(output);
+
+        // To track the LZ77 sliding window, we wrap the stream
         let mut output = CachedWriter::new(output);
+
         loop {
             let bfinal: u8 = self.data.read_bits(1)?;
             let btype: u8 = self.data.read_bits(2)?;
@@ -107,11 +108,12 @@ impl<'a, R: BufRead> Extractor<'a, R> {
             }
         }
 
+        self.data.align_to_byte();
+
         let expected_crc32: u32 = self.data.read_bytes(4)?;
         let expected_isize: u32 = self.data.read_bytes(4)?;
 
-        let calculated_crc = self.running_crc32.finalize();
-        let calculated_isize = self.running_isize;
+        let (calculated_crc, calculated_isize) = output.get_hashes();
 
         if calculated_crc != expected_crc32 {
             bail!(
@@ -120,13 +122,15 @@ impl<'a, R: BufRead> Extractor<'a, R> {
         }
 
         if calculated_isize != expected_isize {
-            bail!("Payload size ({calculated_isize}) doesn't match expected ({expected_isize}).")
+            bail!(
+                "Actual payload size ({calculated_isize}) doesn't match expected ({expected_isize})."
+            )
         }
 
         Ok(())
     }
 
-    fn uncompressed_data(&mut self, output: &mut impl Write) -> Result<()> {
+    fn uncompressed_data<W: Write>(&mut self, output: &mut CachedWriter<W>) -> Result<()> {
         self.data.align_to_byte();
         let len: u16 = self.data.read_bytes(2)?;
         let nlen: u16 = self.data.read_bytes(2)?;
@@ -138,14 +142,6 @@ impl<'a, R: BufRead> Extractor<'a, R> {
         let mut payload = vec![0u8; len.into()];
 
         self.data.read_raw_bytes(&mut payload)?;
-
-        self.running_crc32.update(&payload);
-        self.running_isize = self.running_isize.wrapping_add(
-            payload
-                .len()
-                .try_into()
-                .context("Couldn't fit member byte count in u32")?,
-        );
 
         output.write_all(&payload)?;
 

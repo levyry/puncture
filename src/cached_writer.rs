@@ -11,6 +11,8 @@ use std::io::{self, Write};
 
 use anyhow::{Result, anyhow, bail};
 
+use crate::crc32::Crc32;
+
 pub const WINDOW_SIZE: usize = 32768;
 
 /// A writer that wraps another stream while also keeping a cache of previous
@@ -75,6 +77,12 @@ impl<W: Write> CachedWriter<W> {
         }
 
         Ok(())
+    }
+}
+
+impl<W: Write> CachedWriter<Crc32<W>> {
+    pub const fn get_hashes(&self) -> (u32, u32) {
+        self.main_stream.get_hashes()
     }
 }
 
