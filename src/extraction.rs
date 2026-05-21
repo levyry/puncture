@@ -7,29 +7,23 @@ use anyhow::{Context, Result, bail};
 
 use crate::{bitreader::BitReader, crc32::Crc32};
 
-pub struct Extraction<R, S> {
-    data: BitReader<R>,
-    state: S,
+pub struct Extraction<'a, R> {
+    data: &'a mut BitReader<R>,
+    state: ExtractionState,
 }
 
-impl<R> Extraction<R, Start>
+impl<'a, R> Extraction<'a, R>
 where
     R: BufRead,
 {
-    pub const fn new(data: R) -> Self {
+    pub fn new(data: &'a mut BitReader<R>) -> Self {
         Self {
-            data: BitReader::new(data),
-            state: Start,
+            data,
+            state: ExtractionState::default(),
         }
     }
 
-    pub fn process_header(mut self) -> Result<Extraction<R, ProcessedHeader>> {
-        let mut state = ProcessedHeader {
-            file_name: None,
-            running_crc32: Crc32::new(),
-            running_isize: 0,
-        };
-
+    pub fn process_header(&mut self) -> Result<()> {
         let mut magic = [0; 2];
         self.data.read_raw_bytes(&mut magic)?;
 
@@ -72,7 +66,7 @@ where
                 self.data.read_raw_bytes(&mut byte)?;
                 name.push(byte[0]);
             }
-            state.file_name = Some(CString::from_vec_with_nul(name)?);
+            self.state.file_name = Some(CString::from_vec_with_nul(name)?);
         }
 
         if fcomment {
@@ -91,22 +85,14 @@ where
             None
         };
 
-        Ok(Extraction {
-            data: self.data,
-            state,
-        })
+        Ok(())
     }
-}
 
-impl<R> Extraction<R, ProcessedHeader>
-where
-    R: BufRead,
-{
     pub const fn get_file_name(&self) -> Option<&CString> {
         self.state.file_name.as_ref()
     }
 
-    pub fn extract_into(mut self, output: &mut impl Write) -> Result<Extraction<R, Finish>> {
+    pub fn deflate(mut self, output: &mut impl Write) -> Result<()> {
         let mut bfinal: u8 = self.data.read_bits(1)?;
 
         while bfinal == 0 {
@@ -135,15 +121,21 @@ where
             _ => unreachable!("We only read two bits"),
         }
 
-        let crc32: u32 = self.data.read_bytes(4)?;
-        let isize: u32 = self.data.read_bytes(4)?;
+        let expected_crc32: u32 = self.data.read_bytes(4)?;
+        let expected_isize: u32 = self.data.read_bytes(4)?;
 
-        self.check_crc32(crc32, isize)?;
+        let calculated_crc = self.state.running_crc32.finalize();
+        let calculated_isize = self.state.running_isize;
 
-        Ok(Extraction {
-            data: self.data,
-            state: Finish,
-        })
+        if calculated_crc != expected_crc32 {
+            bail!("CRC32 doesn't match. Payload was corrupted.");
+        }
+
+        if calculated_isize != expected_isize {
+            bail!("Payload size doesn't match expected.")
+        }
+
+        Ok(())
     }
 
     fn uncompressed_data(&mut self, output: &mut impl Write) -> Result<()> {
@@ -179,34 +171,11 @@ where
     fn dynamic_huffman(&mut self, _output: &mut impl Write) -> Result<()> {
         todo!()
     }
-
-    fn check_crc32(&self, expected_crc32: u32, expected_isize: u32) -> Result<()> {
-        let calculated_crc = self.state.running_crc32.finalize();
-        let calculated_isize = self.state.running_isize;
-
-        if calculated_crc != expected_crc32 {
-            bail!("CRC32 doesn't match. Payload was corrupted.");
-        }
-
-        if calculated_isize != expected_isize {
-            bail!("Payload size doesn't match expected.")
-        }
-
-        Ok(())
-    }
 }
 
-// State management stuff
-pub struct Start;
-pub struct ProcessedHeader {
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+pub struct ExtractionState {
     file_name: Option<CString>,
     running_crc32: Crc32,
     running_isize: u32,
 }
-pub struct Finish;
-
-#[allow(dead_code, reason = "This is only for the typestate pattern")]
-pub trait ExtractionState {}
-impl ExtractionState for Start {}
-impl ExtractionState for ProcessedHeader {}
-impl ExtractionState for Finish {}

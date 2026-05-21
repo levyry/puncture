@@ -1,5 +1,6 @@
 const CRC32_TABLE: [u32; 256] = Crc32::make_crc_table();
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Crc32 {
     state: u32,
 }
@@ -54,5 +55,11 @@ impl Crc32 {
 
     pub const fn finalize(&self) -> u32 {
         self.state ^ 0xFF_FF_FF_FF
+    }
+}
+
+impl Default for Crc32 {
+    fn default() -> Self {
+        Self::new()
     }
 }
