@@ -20,24 +20,48 @@ impl<R: BufRead> BitReader<R> {
     }
 
     /// Read at most 64 bits at a time.
-    pub fn read_bits<T>(&mut self, num_of_bits: u8) -> Result<T>
-    where
-        T: TryFrom<u128>,
-    {
-        // Read until we have enough bits
+    pub fn read_bits<T: TryFrom<u128>>(&mut self, num_of_bits: u8) -> Result<T> {
+        if num_of_bits > 64 {
+            bail!("Tried reading more than 64 bits at a time: {num_of_bits}");
+        }
+
+        if num_of_bits == 0 {
+            let result = 0.try_into().map_err(|_| unreachable!());
+
+            return result;
+        }
+
+        // Read from the buffer until we have enough bits
         while self.num_of_stored_bits < num_of_bits {
-            let mut buf = [0; 1];
-            self.data
-                .read_exact(&mut buf)
-                .context("Hit EOF while filling buffer for requested bits")?;
+            let buf = self.data.fill_buf().context("Failed to fill buffer")?;
 
-            let scratch: u128 = buf[0].into();
+            if buf.is_empty() {
+                bail!(
+                    "Hit EOF while filling buffer for requested bits. Number of bits requested: {num_of_bits}"
+                );
+            }
 
-            self.bit_store |= scratch << self.num_of_stored_bits;
-            self.num_of_stored_bits = self
-                .num_of_stored_bits
-                .checked_add(8)
-                .context("Tried storing too many bits in BitReader")?;
+            // Calculate how many bytes we can safely fit into the remaining
+            // space of our u128. Since max num_of_bits is 64, this will always
+            // be at least 8, ensuring we make progress
+            let space_for_bytes = ((u8::saturating_sub(128, self.num_of_stored_bits)) / 8).into();
+
+            let bytes_to_process = buf.len().min(space_for_bytes);
+
+            buf.iter().take(bytes_to_process).for_each(|&byte| {
+                let scratch: u128 = byte.into();
+                self.bit_store |= scratch << self.num_of_stored_bits;
+                self.num_of_stored_bits = self.num_of_stored_bits.saturating_add(8);
+            });
+
+            // for &byte in &buf[..bytes_to_process] {
+            //     let scratch: u128 = byte.into();
+            //     self.bit_store |= scratch << self.num_of_stored_bits;
+            //     self.num_of_stored_bits = self.num_of_stored_bits.saturating_add(8);
+            // }
+
+            // Mark read bytes as consumed
+            self.data.consume(bytes_to_process);
         }
 
         let mask: u128 = 1 << num_of_bits;
@@ -55,16 +79,8 @@ impl<R: BufRead> BitReader<R> {
     }
 
     /// Read at most 8 bytes at a time.
-    pub fn read_bytes<T>(&mut self, num_of_bytes: u8) -> Result<T>
-    where
-        T: TryFrom<u128>,
-    {
+    pub fn read_bytes<T: TryFrom<u128>>(&mut self, num_of_bytes: u8) -> Result<T> {
         let bits = num_of_bytes.saturating_mul(8);
-
-        if bits > 64 {
-            bail!("Tried getting too many bytes from BitReader");
-        }
-
         self.read_bits(bits)
     }
 
@@ -81,10 +97,15 @@ impl<R: BufRead> BitReader<R> {
 
     /// Skip any number of bytes. The skipped bytes will be discarded.
     pub fn skip_bytes(&mut self, num_of_bytes: u64) -> Result<()> {
-        for _ in 0..num_of_bytes {
-            self.read_bits::<u8>(8)?;
+        let mut discard_bits = num_of_bytes.saturating_mul(8);
+        loop {
+            if discard_bits < 65 {
+                let _x: u64 = self.read_bits(discard_bits.try_into()?)?;
+                return Ok(());
+            }
+            let _x: u64 = self.read_bits(64)?;
+            discard_bits = discard_bits.saturating_sub(64);
         }
-        Ok(())
     }
 
     /// Reads raw bytes exactly as they appear in the stream, preserving order.
