@@ -10,6 +10,7 @@ use clap::{Arg, ArgAction, ArgMatches, Command};
 use crate::{bitreader::BitReader, extraction::Extractor};
 
 mod bitreader;
+mod cached_writer;
 mod crc32;
 mod extraction;
 

@@ -5,7 +5,7 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 
-use crate::{bitreader::BitReader, crc32::Crc32};
+use crate::{bitreader::BitReader, cached_writer::CachedWriter, crc32::Crc32};
 
 const GZIP_MAGIC: [u8; 2] = [0x1F, 0x8B];
 const CM_DEFLATE: u8 = 8;
@@ -89,14 +89,15 @@ impl<'a, R: BufRead> Extractor<'a, R> {
     }
 
     pub fn deflate(mut self, output: &mut impl Write) -> Result<()> {
+        let mut output = CachedWriter::new(output);
         loop {
             let bfinal: u8 = self.data.read_bits(1)?;
             let btype: u8 = self.data.read_bits(2)?;
 
             match btype {
-                0b00 => self.uncompressed_data(output)?,
-                0b01 => self.fixed_huffman(output)?,
-                0b10 => self.dynamic_huffman(output)?,
+                0b00 => self.uncompressed_data(&mut output)?,
+                0b01 => self.fixed_huffman(&mut output)?,
+                0b10 => self.dynamic_huffman(&mut output)?,
                 0b11 => bail!("Hit reserved Huffman btype header: 11"),
                 _ => unreachable!("We only read two bits"),
             }
