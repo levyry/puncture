@@ -4,11 +4,11 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use anyhow::Context;
+use anyhow::{Context, Result};
 
 use crate::extraction::{Extraction, ProcessedHeader};
 
-pub fn extract(path: &Path, output: Option<&Path>) -> anyhow::Result<()> {
+pub fn extract(path: &Path, output: Option<&Path>) -> Result<()> {
     // TODO: For now, we read the whole file into memory. This will
     // cause an OOM for large files. Later on, there should be a CLI option
     // for configuring whether to read the whole file into memory, or

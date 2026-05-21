@@ -3,9 +3,9 @@ use std::{
     io::{BufRead, Write},
 };
 
-use anyhow::bail;
+use anyhow::{Context, Result, bail};
 
-use crate::bitreader::BitReader;
+use crate::{bitreader::BitReader, crc32::Crc32};
 
 pub struct Extraction<R, S> {
     data: BitReader<R>,
@@ -23,8 +23,12 @@ where
         }
     }
 
-    pub fn process_header(mut self) -> anyhow::Result<Extraction<R, ProcessedHeader>> {
-        let mut state = ProcessedHeader { file_name: None };
+    pub fn process_header(mut self) -> Result<Extraction<R, ProcessedHeader>> {
+        let mut state = ProcessedHeader {
+            file_name: None,
+            running_crc32: Crc32::new(),
+            running_isize: 0,
+        };
 
         let mut magic = [0; 2];
         self.data.read_raw_bytes(&mut magic)?;
@@ -102,10 +106,7 @@ where
         self.state.file_name.as_ref()
     }
 
-    pub fn extract_into(
-        mut self,
-        output: &mut impl Write,
-    ) -> anyhow::Result<Extraction<R, Finish>> {
+    pub fn extract_into(mut self, output: &mut impl Write) -> Result<Extraction<R, Finish>> {
         let mut bfinal: u8 = self.data.read_bits(1)?;
 
         while bfinal == 0 {
@@ -137,7 +138,7 @@ where
         let crc32: u32 = self.data.read_bytes(4)?;
         let isize: u32 = self.data.read_bytes(4)?;
 
-        self.check_crc32(crc32, isize);
+        self.check_crc32(crc32, isize)?;
 
         Ok(Extraction {
             data: self.data,
@@ -145,7 +146,7 @@ where
         })
     }
 
-    fn uncompressed_data(&mut self, output: &mut impl Write) -> anyhow::Result<()> {
+    fn uncompressed_data(&mut self, output: &mut impl Write) -> Result<()> {
         self.data.align_to_byte();
         let len: u16 = self.data.read_bytes(2)?;
         let nlen: u16 = self.data.read_bytes(2)?;
@@ -158,21 +159,40 @@ where
 
         self.data.read_raw_bytes(&mut payload)?;
 
+        self.state.running_crc32.update(&payload);
+        self.state.running_isize = self.state.running_isize.wrapping_add(
+            payload
+                .len()
+                .try_into()
+                .context("Couldn't fit member byte count in u32")?,
+        );
+
         output.write_all(&payload)?;
 
         Ok(())
     }
 
-    fn fixed_huffman(&mut self, _output: &mut impl Write) -> anyhow::Result<()> {
+    fn fixed_huffman(&mut self, _output: &mut impl Write) -> Result<()> {
         todo!()
     }
 
-    fn dynamic_huffman(&mut self, _output: &mut impl Write) -> anyhow::Result<()> {
+    fn dynamic_huffman(&mut self, _output: &mut impl Write) -> Result<()> {
         todo!()
     }
 
-    fn check_crc32(&self, _crc32: u32, _isize: u32) {
-        todo!()
+    fn check_crc32(&self, expected_crc32: u32, expected_isize: u32) -> Result<()> {
+        let calculated_crc = self.state.running_crc32.finalize();
+        let calculated_isize = self.state.running_isize;
+
+        if calculated_crc != expected_crc32 {
+            bail!("CRC32 doesn't match. Payload was corrupted.");
+        }
+
+        if calculated_isize != expected_isize {
+            bail!("Payload size doesn't match expected.")
+        }
+
+        Ok(())
     }
 }
 
@@ -180,6 +200,8 @@ where
 pub struct Start;
 pub struct ProcessedHeader {
     file_name: Option<CString>,
+    running_crc32: Crc32,
+    running_isize: u32,
 }
 pub struct Finish;
 

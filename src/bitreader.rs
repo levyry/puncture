@@ -1,6 +1,6 @@
 use std::io::BufRead;
 
-use anyhow::{Context, bail};
+use anyhow::{Context, Result, bail};
 
 /// A reader that can extract bits LSB first.
 pub struct BitReader<R> {
@@ -19,7 +19,7 @@ impl<R: BufRead> BitReader<R> {
     }
 
     /// Read at most 64 bits at a time.
-    pub fn read_bits<T>(&mut self, num_of_bits: u8) -> anyhow::Result<T>
+    pub fn read_bits<T>(&mut self, num_of_bits: u8) -> Result<T>
     where
         T: TryFrom<u128>,
     {
@@ -40,8 +40,9 @@ impl<R: BufRead> BitReader<R> {
                 .context("Tried storing too many bits in BitReader")?;
         }
 
-        // Get result
-        let mask = (1 << num_of_bits) - 1;
+        let mask: u128 = 1 << num_of_bits;
+        let mask = mask.saturating_sub(1);
+
         let result = (self.bit_store & mask)
             .try_into()
             .map_err(|_| unreachable!());
@@ -54,7 +55,7 @@ impl<R: BufRead> BitReader<R> {
     }
 
     /// Read at most 8 bytes at a time.
-    pub fn read_bytes<T>(&mut self, num_of_bytes: u8) -> anyhow::Result<T>
+    pub fn read_bytes<T>(&mut self, num_of_bytes: u8) -> Result<T>
     where
         T: TryFrom<u128>,
     {
@@ -79,7 +80,7 @@ impl<R: BufRead> BitReader<R> {
     }
 
     /// Skip any number of bytes. The skipped bytes will be discarded.
-    pub fn skip_bytes(&mut self, num_of_bytes: u64) -> anyhow::Result<()> {
+    pub fn skip_bytes(&mut self, num_of_bytes: u64) -> Result<()> {
         let cycles = num_of_bytes / 4;
         let rem: u8 = (num_of_bytes % 4)
             .try_into()
@@ -96,7 +97,7 @@ impl<R: BufRead> BitReader<R> {
 
     /// Reads raw bytes exactly as they appear in the stream, preserving order.
     /// Used for magic numbers, strings, and uncompressed block payloads.
-    pub fn read_raw_bytes(&mut self, buf: &mut [u8]) -> anyhow::Result<()> {
+    pub fn read_raw_bytes(&mut self, buf: &mut [u8]) -> Result<()> {
         for byte in buf.iter_mut() {
             if self.num_of_stored_bits >= 8 {
                 *byte = (self.bit_store & 0xFF)

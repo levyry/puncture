@@ -1,11 +1,12 @@
-use std::{env, error::Error, path::Path};
+use std::{env, path::Path};
 
+mod bitreader;
+mod crc32;
 mod extraction;
 mod unzip;
 mod zip;
-mod bitreader;
 
-fn main() -> Result<(), Box<dyn Error>> {
+fn main() -> Result<(), anyhow::Error> {
     let args: Vec<String> = env::args().collect();
 
     match args.len() {

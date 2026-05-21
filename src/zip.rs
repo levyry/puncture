@@ -1,5 +1,7 @@
-use std::{io, path::Path};
+use std::path::Path;
 
-pub fn archive(_path: &Path, _output: Option<&Path>) -> Result<(), io::Error> {
+use anyhow::Result;
+
+pub fn archive(_path: &Path, _output: Option<&Path>) -> Result<()> {
     todo!()
 }
