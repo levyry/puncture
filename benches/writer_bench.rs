@@ -1,7 +1,8 @@
 #![expect(
     clippy::arithmetic_side_effects,
     clippy::as_conversions,
-    clippy::unwrap_used
+    clippy::unwrap_used,
+    clippy::missing_errors_doc
 )]
 
 use anyhow::{Result, bail};

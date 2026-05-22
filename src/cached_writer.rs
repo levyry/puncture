@@ -1,9 +1,20 @@
+/// This module houses [`CachedWriter`], which is used for the sliding window
+/// of the LZ77 algorithm.
+///
+/// It is implemented as a fixed-size, overwriting circular buffer. It wraps a
+/// "main stream" which houses the actual data that gets written, but it also
+/// manages `buf`, which is the sliding window that keeps a fixed size history
+/// of what was written into the stream.
+///
+/// There are some LZ77 specific utility functions for making look-back easier.
 use std::io::{self, Write};
 
 use anyhow::{Result, anyhow, bail};
 
 pub const WINDOW_SIZE: usize = 32768;
 
+/// A writer that wraps another stream while also keeping a cache of previous
+/// writes.
 pub struct CachedWriter<W> {
     main_stream: W,
     buf: Box<[u8; WINDOW_SIZE]>,
@@ -11,6 +22,7 @@ pub struct CachedWriter<W> {
 }
 
 impl<W: Write> CachedWriter<W> {
+    /// Create a new [`CachedWriter`] by wrapping another stream.
     pub fn new(stream: W) -> Self {
         let lookback_vec = vec![0u8; WINDOW_SIZE];
 
@@ -25,6 +37,7 @@ impl<W: Write> CachedWriter<W> {
         }
     }
 
+    /// Repeat a specific subslice of the output stream.
     pub fn repeat_from(&mut self, distance: usize, length: usize) -> Result<()> {
         if distance == 0 {
             bail!("LZ77 distance cannot be zero")
@@ -78,10 +91,7 @@ impl<W: Write> Write for CachedWriter<W> {
         } else if let Some(buffer) = buf.get(..written) {
             buffer
         } else {
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
-                anyhow!("CachedWriter got corrupted"),
-            ));
+            return Err(io::Error::other(anyhow!("CachedWriter got corrupted")));
         };
 
         let cache_len = cache_data.len();
@@ -103,10 +113,7 @@ impl<W: Write> Write for CachedWriter<W> {
             buffer1.copy_from_slice(new_data1);
             buffer2.copy_from_slice(new_data2);
         } else {
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
-                anyhow!("CachedWriter got corrupted"),
-            ));
+            return Err(io::Error::other(anyhow!("CachedWriter got corrupted")));
         }
 
         self.write_index = end % WINDOW_SIZE;
