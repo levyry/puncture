@@ -1,9 +1,9 @@
 [package]
-name = "mini-gzip"
+name = "puncture"
 authors = ["Orbán Levente"]
-description = "A small gzip utility. Mainly for educational value."
+description = "A small gzip utility program, intentionally kept simple"
 license = "Apache-2 OR MIT"
-repository = "https://www.github.com/levyry/mini-gzip"
+repository = "https://www.github.com/levyry/puncture"
 keywords = [
     "compression",
     "decompression",

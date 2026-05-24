@@ -75,7 +75,7 @@ fn get_output_stream(
 }
 
 fn get_cli_args() -> Result<ArgMatches> {
-    let mut cmd = Command::new("mini-gzip")
+    let mut cmd = Command::new("puncture")
         .version("0.1.0")
         .about("Compress or uncompress files using the gzip format.")
         .arg(
