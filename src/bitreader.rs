@@ -1,4 +1,4 @@
-use std::io::BufRead;
+use std::io::{self, BufRead};
 
 use anyhow::{Context, Result, bail};
 
@@ -17,6 +17,14 @@ impl<R: BufRead> BitReader<R> {
             bit_store: 0,
             num_of_stored_bits: 0,
         }
+    }
+
+    pub fn read_until(&mut self, byte: u8, buf: &mut Vec<u8>) -> io::Result<usize> {
+        self.data.read_until(byte, buf)
+    }
+
+    pub fn skip_until(&mut self, byte: u8) -> io::Result<usize> {
+        self.data.skip_until(byte)
     }
 
     /// Read at most 64 bits at a time.

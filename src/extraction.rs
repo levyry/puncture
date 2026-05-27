@@ -67,27 +67,13 @@ impl<'a, R: BufRead> Extractor<'a, R> {
 
         if fname {
             let mut name = Vec::new();
-
-            loop {
-                let mut byte = [0; 1];
-                self.data.read_raw_bytes(&mut byte)?;
-                name.push(byte[0]);
-
-                if byte[0] == 0x00 {
-                    break;
-                }
-            }
+            self.data.read_until(0x00, &mut name)?;
             self.file_name = Some(CString::from_vec_with_nul(name)?);
         }
 
         if fcomment {
-            loop {
-                let mut byte = [0; 1];
-                self.data.read_raw_bytes(&mut byte)?;
-                if byte[0] == 0x00 {
-                    break;
-                }
-            }
+            // The comment can be ignored, as it is for human-consumption.
+            self.data.skip_until(0x00)?;
         }
 
         // TODO: Currently, the crc16 field is ignored if it exists.
