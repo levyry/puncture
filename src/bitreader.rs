@@ -19,6 +19,7 @@ impl<R: BufRead> BitReader<R> {
         }
     }
 
+    #[inline(always)]
     pub fn read_until(&mut self, byte: u8, buf: &mut Vec<u8>) -> io::Result<usize> {
         self.data.read_until(byte, buf)
     }
@@ -27,7 +28,49 @@ impl<R: BufRead> BitReader<R> {
         self.data.skip_until(byte)
     }
 
+    /// Peek at most 64 bits at a time without advancing the underlying stream.
+    #[inline(always)]
+    pub fn peek_bits<T: TryFrom<u128>>(&mut self, num_of_bits: u8) -> Result<T> {
+        // We must advance the stream to be able to peek
+        while self.num_of_stored_bits < num_of_bits {
+            self.fill_inner_buffer()?;
+        }
+
+        let mask: u128 = 1 << num_of_bits;
+        let mask = mask.saturating_sub(1);
+
+        let result = (self.bit_store & mask)
+            .try_into()
+            .map_err(|_| unreachable!());
+
+        result
+    }
+
+    /// Advances the underlying stream by [`num_of_bits`].
+    #[inline(always)]
+    pub fn advance_bits(&mut self, num_of_bits: u8) -> Result<()> {
+        // We must advance the stream if there aren't enough stored bits
+        while self.num_of_stored_bits < num_of_bits {
+            self.fill_inner_buffer()?;
+        }
+
+        self.bit_store >>= num_of_bits;
+        self.num_of_stored_bits = self.num_of_stored_bits.saturating_sub(num_of_bits);
+
+        Ok(())
+    }
+
+    /// Advances the underlying stream by [`num_of_bits`].
+    #[inline(always)]
+    pub fn advance_bits_unchecked(&mut self, num_of_bits: u8) -> Result<()> {
+        self.bit_store >>= num_of_bits;
+        self.num_of_stored_bits = self.num_of_stored_bits.saturating_sub(num_of_bits);
+
+        Ok(())
+    }
+
     /// Read at most 64 bits at a time.
+    #[inline(always)]
     pub fn read_bits<T: TryFrom<u128>>(&mut self, num_of_bits: u8) -> Result<T> {
         if num_of_bits > 64 {
             bail!("Tried reading more than 64 bits at a time: {num_of_bits}");
@@ -39,54 +82,37 @@ impl<R: BufRead> BitReader<R> {
             return result;
         }
 
-        // Read from the buffer until we have enough bits
-        while self.num_of_stored_bits < num_of_bits {
-            let buf = self.data.fill_buf().context("Failed to fill buffer")?;
+        let result = self.peek_bits(num_of_bits);
 
-            if buf.is_empty() {
-                bail!(
-                    "Hit EOF while filling buffer for requested bits. Number of bits requested: {num_of_bits}"
-                );
-            }
-
-            // Calculate how many bytes we can safely fit into the remaining
-            // space of our u128. Since max num_of_bits is 64, this will always
-            // be at least 8, ensuring we make progress
-            let space_for_bytes = ((u8::saturating_sub(128, self.num_of_stored_bits)) / 8).into();
-
-            let bytes_to_process = buf.len().min(space_for_bytes);
-
-            buf.iter().take(bytes_to_process).for_each(|&byte| {
-                let scratch: u128 = byte.into();
-                self.bit_store |= scratch << self.num_of_stored_bits;
-                self.num_of_stored_bits = self.num_of_stored_bits.saturating_add(8);
-            });
-
-            // for &byte in &buf[..bytes_to_process] {
-            //     let scratch: u128 = byte.into();
-            //     self.bit_store |= scratch << self.num_of_stored_bits;
-            //     self.num_of_stored_bits = self.num_of_stored_bits.saturating_add(8);
-            // }
-
-            // Mark read bytes as consumed
-            self.data.consume(bytes_to_process);
+        if let Ok(_) = result {
+            self.advance_bits_unchecked(num_of_bits)?;
         }
-
-        let mask: u128 = 1 << num_of_bits;
-        let mask = mask.saturating_sub(1);
-
-        let result = (self.bit_store & mask)
-            .try_into()
-            .map_err(|_| unreachable!());
-
-        // Clear out internal state
-        self.bit_store >>= num_of_bits;
-        self.num_of_stored_bits = self.num_of_stored_bits.saturating_sub(num_of_bits);
 
         result
     }
 
+    #[inline]
+    fn fill_inner_buffer(&mut self) -> Result<(), anyhow::Error> {
+        let buf = self.data.fill_buf().context("Failed to fill buffer")?;
+        if buf.is_empty() {
+            bail!("Hit EOF while filling buffer for requested bits.");
+        }
+        let space_for_bytes = ((u8::saturating_sub(128, self.num_of_stored_bits)) / 8).into();
+        let bytes_to_process = buf.len().min(space_for_bytes);
+
+        buf.iter().take(bytes_to_process).for_each(|&byte| {
+            let scratch: u128 = byte.into();
+            self.bit_store |= scratch << self.num_of_stored_bits;
+            self.num_of_stored_bits = self.num_of_stored_bits.saturating_add(8);
+        });
+
+        self.data.consume(bytes_to_process);
+
+        Ok(())
+    }
+
     /// Read at most 8 bytes at a time.
+    #[inline(always)]
     pub fn read_bytes<T: TryFrom<u128>>(&mut self, num_of_bytes: u8) -> Result<T> {
         let bits = num_of_bytes.saturating_mul(8);
         self.read_bits(bits)
@@ -104,6 +130,7 @@ impl<R: BufRead> BitReader<R> {
     }
 
     /// Skip any number of bytes. The skipped bytes will be discarded.
+    #[inline]
     pub fn skip_bytes(&mut self, num_of_bytes: u64) -> Result<()> {
         let mut discard_bits = num_of_bytes.saturating_mul(8);
         loop {
@@ -153,13 +180,46 @@ mod tests {
 
     #[test]
     fn test_read_basic_bits() -> anyhow::Result<()> {
-        // [0xCA] -> [1100_1010]
         let mut br = create_reader(&[0b1100_1010]);
 
         let bits1: u8 = br.read_bits(4)?;
         assert_eq!(bits1, 0b1010);
 
         let bits2: u8 = br.read_bits(4)?;
+        assert_eq!(bits2, 0b1100);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_peek_basic_bits() -> anyhow::Result<()> {
+        let mut br = create_reader(&[0b1100_1010]);
+
+        let bits1: u8 = br.peek_bits(4)?;
+        assert_eq!(bits1, 0b1010);
+
+        let bits2: u8 = br.read_bits(4)?;
+        assert_eq!(bits2, 0b1010);
+
+        let bits3: u8 = br.peek_bits(4)?;
+        assert_eq!(bits3, 0b1100);
+
+        let bits4: u8 = br.read_bits(4)?;
+        assert_eq!(bits4, 0b1100);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_advance_basic_bits() -> anyhow::Result<()> {
+        let mut br = create_reader(&[0b1100_1010]);
+
+        let bits1: u8 = br.peek_bits(4)?;
+        assert_eq!(bits1, 0b1010);
+
+        br.advance_bits(4)?;
+
+        let bits2: u8 = br.peek_bits(4)?;
         assert_eq!(bits2, 0b1100);
 
         Ok(())
