@@ -10,9 +10,9 @@
 use std::io::{self, Write};
 
 use anyhow::{Result, anyhow, bail};
+use crc32fast::Hasher;
 
-use crate::crc32::Crc32;
-
+const MAX_LENGTH: usize = 258;
 pub const WINDOW_SIZE: usize = 32768;
 
 /// A writer that wraps another stream while also keeping a cache of previous
@@ -21,6 +21,7 @@ pub struct CachedWriter<W> {
     main_stream: W,
     buf: Box<[u8; WINDOW_SIZE]>,
     write_index: usize,
+    crc32_hasher: Hasher,
 }
 
 impl<W: Write> CachedWriter<W> {
@@ -37,6 +38,7 @@ impl<W: Write> CachedWriter<W> {
             main_stream: stream,
             buf,
             write_index: 0,
+            crc32_hasher: Hasher::new(),
         }
     }
 
@@ -59,7 +61,7 @@ impl<W: Write> CachedWriter<W> {
             bail!("LZ77 distance larger than cache window");
         }
 
-        let mut scratch = [0u8; 258];
+        let mut scratch = [0u8; MAX_LENGTH];
 
         let start_offset = WINDOW_SIZE.saturating_sub(distance);
 
@@ -96,11 +98,9 @@ impl<W: Write> CachedWriter<W> {
 
         Ok(())
     }
-}
 
-impl<W: Write> CachedWriter<Crc32<W>> {
-    pub const fn get_hashes(&self) -> (u32, u32) {
-        self.main_stream.get_hashes()
+    pub fn get_crc32(self) -> u32 {
+        self.crc32_hasher.finalize()
     }
 }
 
@@ -130,6 +130,7 @@ impl<W: Write> Write for CachedWriter<W> {
             && let Some(new_data) = cache_data.get(..cache_len)
         {
             buffer.copy_from_slice(new_data);
+            self.crc32_hasher.update(new_data);
         } else if let Ok([buffer1, buffer2]) = self
             .buf
             .get_disjoint_mut([self.write_index..WINDOW_SIZE, 0..(end % WINDOW_SIZE)])
@@ -138,6 +139,8 @@ impl<W: Write> Write for CachedWriter<W> {
         {
             buffer1.copy_from_slice(new_data1);
             buffer2.copy_from_slice(new_data2);
+            self.crc32_hasher.update(new_data1);
+            self.crc32_hasher.update(new_data2);
         } else {
             return Err(io::Error::other(anyhow!("CachedWriter got corrupted")));
         }

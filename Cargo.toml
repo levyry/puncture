@@ -25,6 +25,7 @@ clap = { version = "4", default-features = false, features = [
     "usage",
     "error-context",
 ] }
+crc32fast = "1.5"
 
 [dev-dependencies]
 criterion = "0.8"

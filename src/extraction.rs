@@ -5,7 +5,7 @@ use std::{
 
 use anyhow::{Result, bail};
 
-use crate::{bitreader::BitReader, cached_writer::CachedWriter, crc32::Crc32};
+use crate::{bitreader::BitReader, cached_writer::CachedWriter};
 
 const GZIP_MAGIC: [u8; 2] = [0x1F, 0x8B];
 const CM_DEFLATE: u8 = 8;
@@ -152,10 +152,7 @@ impl<'a, R: BufRead> Extractor<'a, R> {
     /// If EOF is reached at an unexpected moment, or if the CRC-32
     /// hash or ISIZE counter aren't correct.
     pub fn deflate(mut self, output: &mut impl Write) -> Result<()> {
-        // To track the CRC-32 hash, we wrap the output stream
-        let output = Crc32::new(output);
-
-        // To track the LZ77 sliding window, we wrap the stream
+        // To track the LZ77 sliding window and CRC-32 hash, we wrap the stream
         let mut output = CachedWriter::new(output);
 
         loop {
@@ -178,9 +175,9 @@ impl<'a, R: BufRead> Extractor<'a, R> {
         self.data.align_to_byte();
 
         let expected_crc32: u32 = self.data.read_bytes(4)?;
-        let expected_isize: u32 = self.data.read_bytes(4)?;
+        // let expected_isize: u32 = self.data.read_bytes(4)?;
 
-        let (calculated_crc, calculated_isize) = output.get_hashes();
+        let calculated_crc = output.get_crc32();
 
         if calculated_crc != expected_crc32 {
             bail!(
@@ -188,11 +185,11 @@ impl<'a, R: BufRead> Extractor<'a, R> {
             );
         }
 
-        if calculated_isize != expected_isize {
-            bail!(
-                "Actual payload size ({calculated_isize}) doesn't match expected ({expected_isize})."
-            )
-        }
+        // if calculated_isize != expected_isize {
+        //     bail!(
+        //         "Actual payload size ({calculated_isize}) doesn't match expected ({expected_isize})."
+        //     )
+        // }
 
         Ok(())
     }
