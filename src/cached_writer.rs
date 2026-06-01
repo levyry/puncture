@@ -51,6 +51,8 @@ impl<W: Write> CachedWriter<W> {
 
         let mut bytes_written = 0;
 
+        let mut scratch = [0u8; 258];
+
         let start_offset = WINDOW_SIZE.saturating_sub(distance);
 
         while bytes_written != length {
@@ -63,16 +65,21 @@ impl<W: Write> CachedWriter<W> {
             if start < end
                 && let Some(range_to_copy) = self.buf.get(start..end)
             {
-                self.write_all(range_to_copy.to_vec().as_slice())?;
+                let amount_wrote = range_to_copy.len();
+                scratch[..amount_wrote].copy_from_slice(range_to_copy);
+                self.write_all(&mut scratch[..amount_wrote])?;
             } else if let Some(start_to_back) = self.buf.get(start..)
                 && let Some(front_to_end) = self.buf.get(..end)
             {
-                let mut range_to_copy = start_to_back.to_vec();
-                range_to_copy.extend_from_slice(front_to_end);
-                self.write_all(&range_to_copy)?;
+                let start_to_back_len = start_to_back.len();
+                let front_to_end_len = front_to_end.len();
+                let amount_wrote = start_to_back_len + front_to_end_len;
+                scratch[..start_to_back_len].copy_from_slice(start_to_back);
+                scratch[start_to_back_len..amount_wrote].copy_from_slice(front_to_end);
+                self.write_all(&mut scratch[..amount_wrote])?;
+                scratch = [0u8; 258];
             }
 
-            // bytes_written += (end + WINDOW_SIZE - start) % WINDOW_SIZE
             bytes_written = bytes_written.saturating_add(end_offset);
         }
 
