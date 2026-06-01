@@ -9,6 +9,7 @@ use crate::{bitreader::BitReader, cached_writer::CachedWriter};
 
 const GZIP_MAGIC: [u8; 2] = [0x1F, 0x8B];
 const CM_DEFLATE: u8 = 8;
+const MAX_CODE_LENGTH: usize = 15;
 
 const LENGTH_BASE_TABLE: [u16; 29] = [
     3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131,
@@ -32,7 +33,7 @@ const DISTANCE_OFFSET_BITS_TABLE: [u8; 30] = [
 /// A memory-packed Huffman symbol decoding lookup table.
 ///
 ///
-const HUFFMAN_DECODE_LUT: [u16; 512] = {
+const FIXED_LITERALS_LUT: [u16; 512] = {
     let mut table = [0u16; 512];
 
     let mut raw_bits: usize = 0;
@@ -57,6 +58,24 @@ const HUFFMAN_DECODE_LUT: [u16; 512] = {
             }
             _ => (),
         }
+
+        raw_bits += 1;
+    }
+
+    table
+};
+
+const FIXED_DISTANCES_LUT: [u16; 32] = {
+    let mut table = [0u16; 32];
+
+    let mut raw_bits: usize = 0;
+
+    let mut distance: u16;
+
+    while raw_bits < 32 {
+        distance = (raw_bits as u16).reverse_bits() >> 11;
+
+        table[raw_bits] = (5 << 9) | distance;
 
         raw_bits += 1;
     }
@@ -156,9 +175,22 @@ impl<'a, R: BufRead> Extractor<'a, R> {
             let btype: u8 = self.data.read_bits(2);
 
             match btype {
+                // No compression
                 0b00 => self.uncompressed_data(&mut output)?,
-                0b01 => self.fixed_huffman(&mut output)?,
-                0b10 => self.dynamic_huffman(&mut output)?,
+                // Fixed huffman
+                0b01 => self.decode_huffman(
+                    9,
+                    5,
+                    &FIXED_LITERALS_LUT,
+                    &FIXED_DISTANCES_LUT,
+                    &mut output,
+                )?,
+                // Dynamic huffman
+                0b10 => {
+                    let (literals, distances) = self.decode_dynamic_tables();
+
+                    self.decode_huffman(15, 15, &literals, &distances, &mut output)?;
+                }
                 0b11 => bail!("Hit reserved Huffman btype header: 11"),
                 _ => bail!("We only read two bits"),
             }
@@ -190,13 +222,15 @@ impl<'a, R: BufRead> Extractor<'a, R> {
         Ok(())
     }
 
-    fn uncompressed_data<W: Write>(&mut self, output: &mut CachedWriter<W>) -> Result<()> {
+    fn uncompressed_data<W: Write>(&mut self, output: &mut CachedWriter<W>) -> std::io::Result<()> {
         self.data.align_to_byte();
         let len: u16 = self.data.read_bytes(2);
         let nlen: u16 = self.data.read_bytes(2);
 
         if len != !nlen {
-            bail!("Member nlen isn't one's complement of len. len: {len}, nlen: {nlen}");
+            return Err(std::io::Error::other(
+                "Member nlen isn't one's complement of len.",
+            ));
         }
 
         let mut payload = vec![0u8; len.into()];
@@ -208,9 +242,23 @@ impl<'a, R: BufRead> Extractor<'a, R> {
         Ok(())
     }
 
-    fn fixed_huffman<W: Write>(&mut self, output: &mut CachedWriter<W>) -> Result<()> {
+    #[inline(always)]
+    fn decode_huffman<W: Write>(
+        &mut self,
+        literal_length: u8,
+        distance_length: u8,
+        literals: &[u16],
+        distances: &[u16],
+        output: &mut CachedWriter<W>,
+    ) -> Result<()> {
         loop {
-            let symbol = self.decode_fixed_huffman();
+            let literal_bits: u16 = self.data.peek_bits(literal_length);
+
+            let symbol_mask = (1u16 << literal_length).saturating_sub(1);
+            let packed_symbol = literals[usize::from(literal_bits & symbol_mask)];
+            let symbol = packed_symbol & 0x1FF;
+            let symbol_len = (packed_symbol >> 9) as u8;
+            self.data.advance_bits_unchecked(symbol_len);
 
             match symbol {
                 0..256 => output.write_all(&[symbol as u8])?,
@@ -225,17 +273,21 @@ impl<'a, R: BufRead> Extractor<'a, R> {
 
                     let length: usize = length_base.saturating_add(length_offset).into();
 
-                    let distance_bits: u8 = self.data.read_bits(5);
-                    let distance_bits = distance_bits.reverse_bits() >> 3;
+                    let distance_bits: u16 = self.data.peek_bits(distance_length);
 
-                    let distance_index: usize = distance_bits.into();
+                    let distance_mask = (1u16 << distance_length).saturating_sub(1);
+                    let packed_distance = distances[usize::from(distance_bits & distance_mask)];
+
+                    let distance_index = usize::from(packed_distance & 0x1FF);
+                    let distance_len = (packed_distance >> 9) as u8;
+                    self.data.advance_bits_unchecked(distance_len);
 
                     let distance_base = DISTANCE_BASE_TABLE[distance_index];
                     let distance_offset_bits = DISTANCE_OFFSET_BITS_TABLE[distance_index];
 
                     let distance_offset: u16 = self.data.read_bits(distance_offset_bits);
 
-                    let distance: usize = distance_base.saturating_add(distance_offset).into();
+                    let distance = distance_base.saturating_add(distance_offset).into();
 
                     output.repeat_from(distance, length)?;
                 }
@@ -246,21 +298,149 @@ impl<'a, R: BufRead> Extractor<'a, R> {
         Ok(())
     }
 
-    #[inline(always)]
-    fn decode_fixed_huffman(&mut self) -> u16 {
-        let code: usize = self.data.peek_bits(9);
+    fn decode_dynamic_tables(&mut self) -> ([u16; 32768], [u16; 32768]) {
+        let hlit = self.data.read_bits::<u16>(5).saturating_add(257);
+        let hdist = self.data.read_bits::<u8>(5).saturating_add(1);
+        let hclen = self.data.read_bits::<u8>(4).saturating_add(4);
 
-        let packed_result = HUFFMAN_DECODE_LUT[code & 0x1FF];
+        let mut code_lengths_scratch: u64 = self.data.read_bits(hclen.saturating_mul(3));
 
-        let symbol = packed_result & ((1 << 9) - 1);
-        let bit_length = (packed_result >> 9) as u8;
+        let mut codelength_lengths = [0u16; 19];
 
-        self.data.advance_bits_unchecked(bit_length);
+        // RFC defined sequence
+        for index in [
+            16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15,
+        ] {
+            let value = code_lengths_scratch & 0x7;
+            codelength_lengths[index] = value as u16;
+            code_lengths_scratch >>= 3;
+        }
 
-        symbol
+        let mut codelength_codes = [0u16; 19];
+
+        build_huff_codes(&codelength_lengths, &mut codelength_codes);
+
+        let codelength_lut = build_lut::<128>(&codelength_lengths, &codelength_codes);
+
+        let mut lit_dist_table = [0u16; 286 + 32];
+
+        let mut index = 0;
+        let symbol_count = usize::from(hlit.saturating_add(hdist as u16));
+        while index != symbol_count {
+            let bits: u8 = self.data.peek_bits(7);
+
+            let packed_value = codelength_lut[(bits & 0x7F) as usize];
+            let symbol: u16 = packed_value & 0x1FF;
+
+            let symbol_len = (packed_value >> 9) as u8;
+            self.data.advance_bits_unchecked(symbol_len);
+
+            match symbol {
+                0..=15 => {
+                    lit_dist_table[index] = symbol;
+                    index = index.saturating_add(1);
+                }
+                16 => {
+                    let prev = lit_dist_table[index.saturating_sub(1)];
+
+                    let repeat_length = (self.data.read_bits::<u8>(2).saturating_add(3)) as usize;
+
+                    for repeat_index in 0..repeat_length {
+                        lit_dist_table[index.saturating_add(repeat_index)] = prev;
+                    }
+
+                    index = index.saturating_add(repeat_length);
+                }
+                17 => {
+                    let repeat_length = (self.data.read_bits::<u8>(3).saturating_add(3)) as usize;
+
+                    for repeat_index in 0..repeat_length {
+                        lit_dist_table[index.saturating_add(repeat_index)] = 0;
+                    }
+
+                    index = index.saturating_add(repeat_length);
+                }
+                18 => {
+                    let repeat_length = (self.data.read_bits::<u8>(7).saturating_add(11)) as usize;
+
+                    for repeat_index in 0..repeat_length {
+                        lit_dist_table[index.saturating_add(repeat_index)] = 0;
+                    }
+
+                    index = index.saturating_add(repeat_length);
+                }
+                _ => unreachable!("Wrong symbol while building lit/dist table: {symbol}"),
+            }
+        }
+
+        let (lit_lengths, dist_lengths) = lit_dist_table.split_at(hlit.into());
+
+        let mut lit_codes = vec![0u16; usize::from(hlit)];
+
+        build_huff_codes(lit_lengths, &mut lit_codes);
+
+        let lit_table = build_lut::<32768>(lit_lengths, &lit_codes);
+
+        let mut dist_codes = vec![0u16; usize::from(hdist)];
+
+        build_huff_codes(dist_lengths, &mut dist_codes);
+
+        let dist_table = build_lut::<32768>(dist_lengths, &dist_codes);
+
+        (lit_table, dist_table)
+    }
+}
+
+fn build_huff_codes(lengths: &[u16], codes: &mut [u16]) {
+    let bl_count: [u16; MAX_CODE_LENGTH + 1] = {
+        let mut counts = [0u16; MAX_CODE_LENGTH + 1];
+
+        for &bit_length in lengths {
+            counts[bit_length as usize] += 1;
+        }
+
+        counts[0] = 0;
+
+        counts
+    };
+
+    let mut next_code: [u16; MAX_CODE_LENGTH + 1] = {
+        let mut next = [0u16; MAX_CODE_LENGTH + 1];
+        let mut code = 0;
+        for index in 1..=MAX_CODE_LENGTH {
+            code = (code + bl_count[index - 1]) << 1;
+            next[index] = code;
+        }
+
+        next
+    };
+
+    for (index, &code_length) in lengths.iter().enumerate() {
+        if code_length != 0 {
+            let code = next_code[code_length as usize].reverse_bits() >> (16 - code_length);
+            codes[index] = code;
+            next_code[code_length as usize] = next_code[code_length as usize].saturating_add(1);
+        }
+    }
+}
+
+fn build_lut<const LUT: usize>(lengths: &[u16], codes: &[u16]) -> [u16; LUT] {
+    let mut table = [0u16; LUT];
+
+    for (symbol, &length) in lengths.iter().enumerate() {
+        if length == 0 {
+            continue;
+        }
+
+        let mut index = codes[symbol] as usize;
+
+        let step = 1 << length;
+
+        while index < LUT {
+            table[index] = (length << 9) | symbol as u16;
+            index = index.saturating_add(step);
+        }
     }
 
-    fn dynamic_huffman(&mut self, _output: &mut impl Write) -> Result<()> {
-        todo!()
-    }
+    table
 }

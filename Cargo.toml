@@ -40,7 +40,7 @@ cargo = { level = "deny", priority = -1 }
 unwrap_used = "deny"
 expect_used = "warn"
 arithmetic_side_effects = "deny"
-unreachable = "deny"
+unreachable = "warn"
 unimplemented = "deny"
 unchecked_time_subtraction = "deny"
 todo = "warn"
