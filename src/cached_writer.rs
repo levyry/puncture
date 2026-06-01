@@ -28,9 +28,10 @@ impl<W: Write> CachedWriter<W> {
     pub fn new(stream: W) -> Self {
         let lookback_vec = vec![0u8; WINDOW_SIZE];
 
-        let Ok(buf) = lookback_vec.into_boxed_slice().try_into() else {
-            unreachable!();
-        };
+        let buf = lookback_vec
+            .into_boxed_slice()
+            .try_into()
+            .expect("We just created this vec with this exact size.");
 
         Self {
             main_stream: stream,
@@ -40,6 +41,15 @@ impl<W: Write> CachedWriter<W> {
     }
 
     /// Repeat a specific subslice of the output stream.
+    ///
+    /// # Errors
+    ///
+    /// If the distance is zero or larger than [`WINDOW_SIZE`], or if the
+    /// underlying streams writer errors.
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "The length can be at most 258 per RFC1951."
+    )]
     pub fn repeat_from(&mut self, distance: usize, length: usize) -> Result<()> {
         if distance == 0 {
             bail!("LZ77 distance cannot be zero")
@@ -69,7 +79,7 @@ impl<W: Write> CachedWriter<W> {
         {
             let start_to_back_len = start_to_back.len();
             let front_to_end_len = front_to_end.len();
-            amount_wrote = start_to_back_len + front_to_end_len;
+            amount_wrote = start_to_back_len.saturating_add(front_to_end_len);
 
             scratch[..start_to_back_len].copy_from_slice(start_to_back);
             scratch[start_to_back_len..amount_wrote].copy_from_slice(front_to_end);
@@ -79,10 +89,10 @@ impl<W: Write> CachedWriter<W> {
             let chunk_size = usize::min(amount_wrote, length.saturating_sub(amount_wrote));
 
             scratch.copy_within(0..chunk_size, amount_wrote);
-            amount_wrote += chunk_size;
+            amount_wrote = amount_wrote.saturating_add(chunk_size);
         }
 
-        self.write_all(&mut scratch[..amount_wrote])?;
+        self.write_all(&scratch[..amount_wrote])?;
 
         Ok(())
     }

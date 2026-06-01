@@ -1,4 +1,7 @@
-use std::io::{self, BufRead};
+use std::{
+    fmt::Debug,
+    io::{self, BufRead},
+};
 
 use anyhow::{Context, Result, bail};
 
@@ -19,18 +22,42 @@ impl<R: BufRead> BitReader<R> {
         }
     }
 
-    #[inline(always)]
+    /// Reads all bytes into buf until the delimiter byte or EOF is reached.
+    ///
+    /// This function is a wrapper around the underlying streams `read_until`.
+    ///
+    /// # Errors
+    ///
+    /// If the underlying stream errors.
     pub fn read_until(&mut self, byte: u8, buf: &mut Vec<u8>) -> io::Result<usize> {
         self.data.read_until(byte, buf)
     }
 
+    /// Skips all bytes until the delimiter byte or EOF is reached.
+    ///
+    /// This function is a wrapper around the underlying streams `skip_until`.
+    ///
+    /// # Errors
+    ///
+    /// If the underlying stream errors.
     pub fn skip_until(&mut self, byte: u8) -> io::Result<usize> {
         self.data.skip_until(byte)
     }
 
     /// Peek at most 64 bits at a time without advancing the underlying stream.
+    ///
+    /// Note that the underlying stream might need to be advanced if there
+    /// aren't enough bits stored in the [`BitReader`].
+    ///
+    /// # Errors
+    ///
+    /// If filling the inner buffer fails, like because of hitting EOF.
     #[inline(always)]
-    pub fn peek_bits<T: TryFrom<u128>>(&mut self, num_of_bits: u8) -> Result<T> {
+    pub fn peek_bits<T>(&mut self, num_of_bits: u8) -> Result<T>
+    where
+        T: TryFrom<u128>,
+        T::Error: Debug,
+    {
         // We must advance the stream to be able to peek
         while self.num_of_stored_bits < num_of_bits {
             self.fill_inner_buffer()?;
@@ -39,14 +66,19 @@ impl<R: BufRead> BitReader<R> {
         let mask: u128 = 1 << num_of_bits;
         let mask = mask.saturating_sub(1);
 
-        let result = (self.bit_store & mask)
+        Ok((self.bit_store & mask)
             .try_into()
-            .map_err(|_| unreachable!());
-
-        result
+            .expect("We always mask the right amount of bits."))
     }
 
-    /// Advances the underlying stream by [`num_of_bits`].
+    /// Advances the underlying stream by a certain amount.
+    ///
+    /// Note that the underlying stream might need to be advanced if there
+    /// aren't enough bits stored in the [`BitReader`].
+    ///
+    /// # Errors
+    ///
+    /// If filling the inner buffer fails, like because of hitting EOF.
     #[inline(always)]
     pub fn advance_bits(&mut self, num_of_bits: u8) -> Result<()> {
         // We must advance the stream if there aren't enough stored bits
@@ -60,44 +92,55 @@ impl<R: BufRead> BitReader<R> {
         Ok(())
     }
 
-    /// Advances the underlying stream by [`num_of_bits`].
+    /// Advances the underlying stream by `num_of_bits` without checks.
+    ///
+    /// This can result in data loss if there are less than `num_of_bits`
+    /// bits stored in the internal buffer.
     #[inline(always)]
-    pub fn advance_bits_unchecked(&mut self, num_of_bits: u8) -> Result<()> {
+    pub const fn advance_bits_unchecked(&mut self, num_of_bits: u8) {
         self.bit_store >>= num_of_bits;
         self.num_of_stored_bits = self.num_of_stored_bits.saturating_sub(num_of_bits);
-
-        Ok(())
     }
 
-    /// Read at most 64 bits at a time.
+    /// Read at most 64 bits at a time from the underlying stream.
+    ///
+    /// # Errors
+    ///
+    /// If `num_of_bits` is greater than 64, or if filling the underlying
+    /// stream fails, like because of hitting EOF.
     #[inline(always)]
-    pub fn read_bits<T: TryFrom<u128>>(&mut self, num_of_bits: u8) -> Result<T> {
+    pub fn read_bits<T>(&mut self, num_of_bits: u8) -> Result<T>
+    where
+        T: TryFrom<u128>,
+        T::Error: Debug,
+    {
         if num_of_bits > 64 {
             bail!("Tried reading more than 64 bits at a time: {num_of_bits}");
         }
 
         if num_of_bits == 0 {
-            let result = 0.try_into().map_err(|_| unreachable!());
-
-            return result;
+            return Ok(0.try_into().expect("Trivially true"));
         }
 
         let result = self.peek_bits(num_of_bits);
 
-        if let Ok(_) = result {
-            self.advance_bits_unchecked(num_of_bits)?;
+        if result.is_ok() {
+            self.advance_bits_unchecked(num_of_bits);
         }
 
         result
     }
 
     #[inline]
-    fn fill_inner_buffer(&mut self) -> Result<(), anyhow::Error> {
+    fn fill_inner_buffer(&mut self) -> Result<()> {
         let buf = self.data.fill_buf().context("Failed to fill buffer")?;
+
         if buf.is_empty() {
             bail!("Hit EOF while filling buffer for requested bits.");
         }
+
         let space_for_bytes = ((u8::saturating_sub(128, self.num_of_stored_bits)) / 8).into();
+
         let bytes_to_process = buf.len().min(space_for_bytes);
 
         buf.iter().take(bytes_to_process).for_each(|&byte| {
@@ -112,8 +155,18 @@ impl<R: BufRead> BitReader<R> {
     }
 
     /// Read at most 8 bytes at a time.
+    ///
+    /// This is just a wrapper for [`Self::read_bits`], but measured in bytes.
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::read_bits`].
     #[inline(always)]
-    pub fn read_bytes<T: TryFrom<u128>>(&mut self, num_of_bytes: u8) -> Result<T> {
+    pub fn read_bytes<T>(&mut self, num_of_bytes: u8) -> Result<T>
+    where
+        T: TryFrom<u128>,
+        T::Error: std::fmt::Debug,
+    {
         let bits = num_of_bytes.saturating_mul(8);
         self.read_bits(bits)
     }
@@ -130,6 +183,10 @@ impl<R: BufRead> BitReader<R> {
     }
 
     /// Skip any number of bytes. The skipped bytes will be discarded.
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::read_bits`].
     #[inline]
     pub fn skip_bytes(&mut self, num_of_bytes: u64) -> Result<()> {
         let mut discard_bits = num_of_bytes.saturating_mul(8);
@@ -144,13 +201,18 @@ impl<R: BufRead> BitReader<R> {
     }
 
     /// Reads raw bytes exactly as they appear in the stream, preserving order.
+    ///
     /// Used for magic numbers, strings, and uncompressed block payloads.
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::read_bits`].
     pub fn read_raw_bytes(&mut self, buf: &mut [u8]) -> Result<()> {
         for byte in buf.iter_mut() {
             if self.num_of_stored_bits >= 8 {
                 *byte = (self.bit_store & 0xFF)
                     .try_into()
-                    .context("We masked for exactly 8 bits")?;
+                    .expect("We masked for the bottom 8 bits");
 
                 self.bit_store >>= 8;
                 self.num_of_stored_bits = self.num_of_stored_bits.saturating_sub(8);

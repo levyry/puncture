@@ -44,16 +44,16 @@ const HUFFMAN_DECODE_LUT: [u16; 512] = {
 
         match reversed_bits {
             0b0_00_00_00_00..=0b0_01_01_11_11 => {
-                table[raw_bits] = (7 << 9) | ((256 + (reversed_bits >> 2) - 0) as u16);
+                table[raw_bits] = (7 << 9) | (256 + (reversed_bits >> 2));
             }
             0b00_11_00_00_0..=0b10_11_11_11_1 => {
-                table[raw_bits] = (8 << 9) | ((0 + (reversed_bits >> 1) - 0b00_11_00_00) as u16);
+                table[raw_bits] = (8 << 9) | ((reversed_bits >> 1) - 0b00_11_00_00);
             }
             0b11_00_00_00_0..=0b11_00_01_11_1 => {
-                table[raw_bits] = (8 << 9) | ((280 + (reversed_bits >> 1) - 0b11_00_00_00) as u16);
+                table[raw_bits] = (8 << 9) | (280 + (reversed_bits >> 1) - 0b11_00_00_00);
             }
             0b1_10_01_00_00..=0b1_11_11_11_11 => {
-                table[raw_bits] = (9 << 9) | ((144 + reversed_bits - 0b1_10_01_00_00) as u16);
+                table[raw_bits] = (9 << 9) | (144 + reversed_bits - 0b1_10_01_00_00);
             }
             _ => (),
         }
@@ -78,10 +78,17 @@ impl<'a, R: BufRead> Extractor<'a, R> {
         }
     }
 
+    #[must_use]
     pub const fn get_file_name(&self) -> Option<&CString> {
         self.file_name.as_ref()
     }
 
+    /// Process the GZIP header
+    ///
+    /// # Errors
+    ///
+    /// If the header isn't per the RFC 1952 specification, or EOF is reached
+    /// while parsing the header.
     pub fn process_header(&mut self) -> Result<()> {
         let mut magic = [0; 2];
         self.data.read_raw_bytes(&mut magic)?;
@@ -138,6 +145,12 @@ impl<'a, R: BufRead> Extractor<'a, R> {
         Ok(())
     }
 
+    /// Runs the DEFLATE algorithm and writes the result to output.
+    ///
+    /// # Errors
+    ///
+    /// If EOF is reached at an unexpected moment, or if the CRC-32
+    /// hash or ISIZE counter aren't correct.
     pub fn deflate(mut self, output: &mut impl Write) -> Result<()> {
         // To track the CRC-32 hash, we wrap the output stream
         let output = Crc32::new(output);
@@ -154,7 +167,7 @@ impl<'a, R: BufRead> Extractor<'a, R> {
                 0b01 => self.fixed_huffman(&mut output)?,
                 0b10 => self.dynamic_huffman(&mut output)?,
                 0b11 => bail!("Hit reserved Huffman btype header: 11"),
-                _ => unreachable!("We only read two bits"),
+                _ => bail!("We only read two bits"),
             }
 
             if bfinal != 0 {
@@ -210,14 +223,14 @@ impl<'a, R: BufRead> Extractor<'a, R> {
                 0..256 => output.write_all(&[symbol as u8])?,
                 256 => break,
                 257..286 => {
-                    let length_index: usize = (symbol - 257).into();
+                    let length_index: usize = (symbol.saturating_sub(257)).into();
 
                     let length_base = LENGTH_BASE_TABLE[length_index];
                     let length_offset_bits = LENGTH_OFFSET_BITS_TABLE[length_index];
 
                     let length_offset: u16 = self.data.read_bits(length_offset_bits)?;
 
-                    let length: usize = (length_base + length_offset).into();
+                    let length: usize = (length_base.saturating_add(length_offset)).into();
 
                     let distance_bits: u8 = self.data.read_bits(5)?;
                     let distance_bits = distance_bits.reverse_bits() >> 3;
@@ -229,7 +242,7 @@ impl<'a, R: BufRead> Extractor<'a, R> {
 
                     let distance_offset: u16 = self.data.read_bits(distance_offset_bits)?;
 
-                    let distance: usize = (distance_base + distance_offset).into();
+                    let distance: usize = (distance_base.saturating_add(distance_offset)).into();
 
                     output.repeat_from(distance, length)?;
                 }
@@ -249,7 +262,7 @@ impl<'a, R: BufRead> Extractor<'a, R> {
         let symbol = packed_result & ((1 << 9) - 1);
         let bit_length = (packed_result >> 9) as u8;
 
-        self.data.advance_bits_unchecked(bit_length)?;
+        self.data.advance_bits_unchecked(bit_length);
 
         Ok(symbol)
     }

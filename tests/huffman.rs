@@ -1,10 +1,10 @@
-// tests/decoding_tests.rs
 use puncture::bitreader::BitReader;
 use puncture::extraction::Extractor;
 use std::fs;
 use std::io::Cursor;
 
 #[test]
+#[expect(clippy::expect_used)]
 fn test_fixed_huffman_random() {
     // Arrange
     let archive_path = "tests/data/large_random.txt.gz";
@@ -32,6 +32,7 @@ fn test_fixed_huffman_random() {
 }
 
 #[test]
+#[expect(clippy::expect_used)]
 fn test_fixed_huffman_shakespeare() {
     // Arrange
     let archive_path = "tests/data/shakespeare.txt.gz";

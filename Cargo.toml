@@ -37,24 +37,27 @@ cargo = { level = "deny", priority = -1 }
 # Harden
 ## Stops panics
 unwrap_used = "deny"
-expect_used = "deny"
-indexing_slicing = "deny"
+expect_used = "warn"
 arithmetic_side_effects = "deny"
-# unreachable = "deny"
+unreachable = "deny"
 unimplemented = "deny"
 unchecked_time_subtraction = "deny"
-# todo = "deny"
+todo = "warn"
 string_slice = "deny"
 panic_in_result_fn = "deny"
 panic = "deny"
 exit = "deny"
-as_conversions = "deny"
 ## Restrictions
 if_then_some_else_none = "deny"
 str_to_string = "deny"
 implicit_clone = "deny"
 try_err = "deny"
 undocumented_unsafe_blocks = "deny"
+
+# Allowlist
+unusual_byte_groupings = "allow" # Since Huffman uses MSB/LSB in a mixed way
+inline_always = "allow"
+missing_panics_doc = "allow"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
