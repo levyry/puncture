@@ -49,39 +49,40 @@ impl<W: Write> CachedWriter<W> {
             bail!("LZ77 distance larger than cache window");
         }
 
-        let mut bytes_written = 0;
-
         let mut scratch = [0u8; 258];
 
         let start_offset = WINDOW_SIZE.saturating_sub(distance);
 
-        while bytes_written != length {
-            let start = self.write_index.saturating_add(start_offset) % WINDOW_SIZE;
+        let start = self.write_index.saturating_add(start_offset) % WINDOW_SIZE;
 
-            let end_offset = usize::min(distance, length.saturating_sub(bytes_written));
+        let end = start.saturating_add(distance.min(length)) % WINDOW_SIZE;
 
-            let end = start.saturating_add(end_offset) % WINDOW_SIZE;
+        let mut amount_wrote = 0;
 
-            if start < end
-                && let Some(range_to_copy) = self.buf.get(start..end)
-            {
-                let amount_wrote = range_to_copy.len();
-                scratch[..amount_wrote].copy_from_slice(range_to_copy);
-                self.write_all(&mut scratch[..amount_wrote])?;
-            } else if let Some(start_to_back) = self.buf.get(start..)
-                && let Some(front_to_end) = self.buf.get(..end)
-            {
-                let start_to_back_len = start_to_back.len();
-                let front_to_end_len = front_to_end.len();
-                let amount_wrote = start_to_back_len + front_to_end_len;
-                scratch[..start_to_back_len].copy_from_slice(start_to_back);
-                scratch[start_to_back_len..amount_wrote].copy_from_slice(front_to_end);
-                self.write_all(&mut scratch[..amount_wrote])?;
-                scratch = [0u8; 258];
-            }
+        if start < end
+            && let Some(range_to_copy) = self.buf.get(start..end)
+        {
+            amount_wrote = range_to_copy.len();
+            scratch[..amount_wrote].copy_from_slice(range_to_copy);
+        } else if let Some(start_to_back) = self.buf.get(start..)
+            && let Some(front_to_end) = self.buf.get(..end)
+        {
+            let start_to_back_len = start_to_back.len();
+            let front_to_end_len = front_to_end.len();
+            amount_wrote = start_to_back_len + front_to_end_len;
 
-            bytes_written = bytes_written.saturating_add(end_offset);
+            scratch[..start_to_back_len].copy_from_slice(start_to_back);
+            scratch[start_to_back_len..amount_wrote].copy_from_slice(front_to_end);
         }
+
+        while amount_wrote != length {
+            let chunk_size = usize::min(amount_wrote, length.saturating_sub(amount_wrote));
+
+            scratch.copy_within(0..chunk_size, amount_wrote);
+            amount_wrote += chunk_size;
+        }
+
+        self.write_all(&mut scratch[..amount_wrote])?;
 
         Ok(())
     }
