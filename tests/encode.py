@@ -2,13 +2,14 @@ import zlib
 import argparse
 import os
 
-def compress_file(input_filename, use_fixed_huffman):
+def compress_file(input_filename, use_fixed_huffman, use_no_compr):
     output_filename = f"{input_filename}.gz"
     
     strategy = zlib.Z_FIXED if use_fixed_huffman else zlib.Z_DEFAULT_STRATEGY
+    level = 0 if use_no_compr else 9
 
     compressor = zlib.compressobj(
-        level=9,
+        level=level,
         method=zlib.DEFLATED,
         wbits=31,
         memLevel=8,
@@ -40,7 +41,13 @@ if __name__ == "__main__":
         action="store_true", 
         help="Force Fixed Huffman encoding. If omitted, uses Dynamic Huffman."
     )
+
+    parser.add_argument(
+        "--nocompr", 
+        action="store_true", 
+        help="Force no compression encoding. If omitted, uses Dynamic Huffman."
+    )
     
     args = parser.parse_args()
     
-    compress_file(args.input_file, args.fixed)
+    compress_file(args.input_file, args.fixed, args.nocompr)
