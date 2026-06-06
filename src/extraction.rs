@@ -91,18 +91,18 @@ impl<'a, R: BufRead> Extractor<'a, R> {
     /// while parsing the header.
     pub fn process_header(&mut self) -> Result<()> {
         let mut magic = [0; 2];
-        self.data.read_raw_bytes(&mut magic)?;
+        self.data.read_raw_bytes(&mut magic);
 
         if magic != GZIP_MAGIC {
             bail!("Incorrect magic: {}{}", magic[0], magic[1]);
         }
 
-        let cm: u8 = self.data.read_bytes(1)?;
+        let cm: u8 = self.data.read_bytes(1);
         if cm != CM_DEFLATE {
             bail!("Incorrect compression method: {cm}");
         }
 
-        let flags: u8 = self.data.read_bytes(1)?;
+        let flags: u8 = self.data.read_bytes(1);
 
         let fhcrc = (flags & 0x02) != 0;
         let fextra = (flags & 0x04) != 0;
@@ -114,12 +114,12 @@ impl<'a, R: BufRead> Extractor<'a, R> {
         }
 
         // TODO: We skip MTIME, XFL and OS headers.
-        let _mtime: u32 = self.data.read_bytes(4)?;
-        let _xfl_and_os: u16 = self.data.read_bytes(2)?;
+        let _mtime: u32 = self.data.read_bytes(4);
+        let _xfl_and_os: u16 = self.data.read_bytes(2);
 
         if fextra {
-            let xlen: u16 = self.data.read_bytes(2)?;
-            self.data.skip_bytes(xlen.into())?;
+            let xlen: u16 = self.data.read_bytes(2);
+            self.data.skip_bytes(xlen.into());
         }
 
         if fname {
@@ -136,11 +136,7 @@ impl<'a, R: BufRead> Extractor<'a, R> {
         // TODO: Currently, the crc16 field is ignored if it exists.
         // I could calculate this, but then I would need to keep a
         // seperate buffer for all the header fields I read in.
-        let mut _crc16: Option<u16> = if fhcrc {
-            Some(self.data.read_bytes(2)?)
-        } else {
-            None
-        };
+        let mut _crc16: Option<u16> = fhcrc.then(|| self.data.read_bytes(2));
 
         Ok(())
     }
@@ -156,8 +152,8 @@ impl<'a, R: BufRead> Extractor<'a, R> {
         let mut output = CachedWriter::new(output);
 
         loop {
-            let bfinal: u8 = self.data.read_bits(1)?;
-            let btype: u8 = self.data.read_bits(2)?;
+            let bfinal: u8 = self.data.read_bits(1);
+            let btype: u8 = self.data.read_bits(2);
 
             match btype {
                 0b00 => self.uncompressed_data(&mut output)?,
@@ -174,8 +170,8 @@ impl<'a, R: BufRead> Extractor<'a, R> {
 
         self.data.align_to_byte();
 
-        let expected_crc32: u32 = self.data.read_bytes(4)?;
-        // let expected_isize: u32 = self.data.read_bytes(4)?;
+        let expected_crc32: u32 = self.data.read_bytes(4);
+        // let expected_isize: u32 = self.data.read_bytes(4);
 
         let calculated_crc = output.get_crc32();
 
@@ -196,8 +192,8 @@ impl<'a, R: BufRead> Extractor<'a, R> {
 
     fn uncompressed_data<W: Write>(&mut self, output: &mut CachedWriter<W>) -> Result<()> {
         self.data.align_to_byte();
-        let len: u16 = self.data.read_bytes(2)?;
-        let nlen: u16 = self.data.read_bytes(2)?;
+        let len: u16 = self.data.read_bytes(2);
+        let nlen: u16 = self.data.read_bytes(2);
 
         if len != !nlen {
             bail!("Member nlen isn't one's complement of len. len: {len}, nlen: {nlen}");
@@ -205,7 +201,7 @@ impl<'a, R: BufRead> Extractor<'a, R> {
 
         let mut payload = vec![0u8; len.into()];
 
-        self.data.read_raw_bytes(&mut payload)?;
+        self.data.read_raw_bytes(&mut payload);
 
         output.write_all(&payload)?;
 
@@ -214,22 +210,22 @@ impl<'a, R: BufRead> Extractor<'a, R> {
 
     fn fixed_huffman<W: Write>(&mut self, output: &mut CachedWriter<W>) -> Result<()> {
         loop {
-            let symbol = self.decode_fixed_huffman()?;
+            let symbol = self.decode_fixed_huffman();
 
             match symbol {
                 0..256 => output.write_all(&[symbol as u8])?,
                 256 => break,
                 257..286 => {
-                    let length_index: usize = (symbol.saturating_sub(257)).into();
+                    let length_index: usize = symbol.saturating_sub(257).into();
 
                     let length_base = LENGTH_BASE_TABLE[length_index];
                     let length_offset_bits = LENGTH_OFFSET_BITS_TABLE[length_index];
 
-                    let length_offset: u16 = self.data.read_bits(length_offset_bits)?;
+                    let length_offset: u16 = self.data.read_bits(length_offset_bits);
 
-                    let length: usize = (length_base.saturating_add(length_offset)).into();
+                    let length: usize = length_base.saturating_add(length_offset).into();
 
-                    let distance_bits: u8 = self.data.read_bits(5)?;
+                    let distance_bits: u8 = self.data.read_bits(5);
                     let distance_bits = distance_bits.reverse_bits() >> 3;
 
                     let distance_index: usize = distance_bits.into();
@@ -237,9 +233,9 @@ impl<'a, R: BufRead> Extractor<'a, R> {
                     let distance_base = DISTANCE_BASE_TABLE[distance_index];
                     let distance_offset_bits = DISTANCE_OFFSET_BITS_TABLE[distance_index];
 
-                    let distance_offset: u16 = self.data.read_bits(distance_offset_bits)?;
+                    let distance_offset: u16 = self.data.read_bits(distance_offset_bits);
 
-                    let distance: usize = (distance_base.saturating_add(distance_offset)).into();
+                    let distance: usize = distance_base.saturating_add(distance_offset).into();
 
                     output.repeat_from(distance, length)?;
                 }
@@ -251,17 +247,17 @@ impl<'a, R: BufRead> Extractor<'a, R> {
     }
 
     #[inline(always)]
-    fn decode_fixed_huffman(&mut self) -> Result<u16> {
-        let code: usize = self.data.peek_bits(9)?;
+    fn decode_fixed_huffman(&mut self) -> u16 {
+        let code: usize = self.data.peek_bits(9);
 
-        let packed_result = HUFFMAN_DECODE_LUT[code & 511];
+        let packed_result = HUFFMAN_DECODE_LUT[code & 0x1FF];
 
         let symbol = packed_result & ((1 << 9) - 1);
         let bit_length = (packed_result >> 9) as u8;
 
         self.data.advance_bits_unchecked(bit_length);
 
-        Ok(symbol)
+        symbol
     }
 
     fn dynamic_huffman(&mut self, _output: &mut impl Write) -> Result<()> {
