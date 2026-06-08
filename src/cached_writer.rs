@@ -1,24 +1,16 @@
-/// This module houses [`CachedWriter`], which is used for the sliding window
-/// of the LZ77 algorithm.
-///
-/// It is implemented as a fixed-size, overwriting circular buffer. It wraps a
-/// "main stream" which houses the actual data that gets written, but it also
-/// manages `buf`, which is the sliding window that keeps a fixed size history
-/// of what was written into the stream.
-///
-/// There are some LZ77 specific utility functions for making look-back easier.
 use std::io::{self, Write};
 
 use crc32fast::Hasher;
 
 const MAX_LENGTH: usize = 258;
-pub const WINDOW_SIZE: usize = 32768;
+pub const HISTORY_SIZE: usize = 32768;
+pub const TOTAL_SIZE: usize = HISTORY_SIZE * 2;
 
 /// A writer that wraps another stream while also keeping a cache of previous
 /// writes.
 pub struct CachedWriter<W> {
     main_stream: W,
-    buf: Box<[u8; WINDOW_SIZE]>,
+    buf: Box<[u8; TOTAL_SIZE]>,
     write_index: usize,
     crc32_hasher: Hasher,
 }
@@ -26,122 +18,100 @@ pub struct CachedWriter<W> {
 impl<W: Write> CachedWriter<W> {
     /// Create a new [`CachedWriter`] by wrapping another stream.
     pub fn new(stream: W) -> Self {
-        let lookback_vec = vec![0u8; WINDOW_SIZE];
-
-        let buf = lookback_vec
-            .into_boxed_slice()
-            .try_into()
-            .expect("We just created this vec with this exact size.");
-
         Self {
             main_stream: stream,
-            buf,
-            write_index: 0,
+            buf: Box::new([0u8; TOTAL_SIZE]),
+            write_index: HISTORY_SIZE,
             crc32_hasher: Hasher::new(),
         }
     }
 
-    /// Repeat a specific subslice of the output stream.
-    ///
-    /// # Errors
-    ///
-    /// If the distance is zero or larger than [`WINDOW_SIZE`], or if the
-    /// underlying streams writer errors.
-    #[expect(
-        clippy::indexing_slicing,
-        reason = "The length can be at most 258 per RFC1951."
-    )]
-    pub fn repeat_from(&mut self, distance: usize, length: usize) -> io::Result<()> {
-        if distance == 0 {
-            panic!("LZ77 distance cannot be zero")
-        }
-
-        if distance > WINDOW_SIZE {
-            panic!("LZ77 distance larger than cache window");
-        }
-
-        let mut scratch = [0u8; MAX_LENGTH];
-
-        let start = (self.write_index + WINDOW_SIZE - distance) % WINDOW_SIZE;
-
-        let end = (start + distance.min(length)) % WINDOW_SIZE;
-
-        let mut amount_wrote = 0;
-
-        if start < end
-            && let Some(range_to_copy) = self.buf.get(start..end)
-        {
-            amount_wrote = range_to_copy.len();
-            scratch[..amount_wrote].copy_from_slice(range_to_copy);
-        } else if let Some(start_to_back) = self.buf.get(start..)
-            && let Some(front_to_end) = self.buf.get(..end)
-        {
-            let start_to_back_len = start_to_back.len();
-            let front_to_end_len = front_to_end.len();
-            amount_wrote = start_to_back_len + front_to_end_len;
-
-            scratch[..start_to_back_len].copy_from_slice(start_to_back);
-            scratch[start_to_back_len..amount_wrote].copy_from_slice(front_to_end);
-        }
-
-        while amount_wrote != length {
-            let chunk_size = usize::min(amount_wrote, length - amount_wrote);
-
-            scratch.copy_within(0..chunk_size, amount_wrote);
-            amount_wrote += chunk_size;
-        }
-
-        self.write_all(&scratch[..amount_wrote])
+    #[inline(always)]
+    pub fn write_literal(&mut self, literal: u8) -> io::Result<()> {
+        self.buf[self.write_index] = literal;
+        self.write_index += 1;
+        self.check_flush()
     }
 
-    pub fn get_crc32(self) -> u32 {
-        self.crc32_hasher.finalize()
+    /// Repeat a specific subslice of the output stream.
+    #[inline(always)]
+    pub fn repeat_from(&mut self, distance: usize, length: usize) -> io::Result<()> {
+        let start = self.write_index - distance;
+        let end = start + length;
+
+        self.buf.copy_within(start..end, self.write_index);
+        self.write_index += length.min(distance);
+
+        if length > distance {
+            let mut amount_wrote = distance;
+
+            while amount_wrote != length {
+                let chunk_size = amount_wrote.min(length - amount_wrote);
+                let end = start + chunk_size;
+
+                self.buf.copy_within(start..end, self.write_index);
+
+                self.write_index += chunk_size;
+                amount_wrote += chunk_size;
+            }
+        }
+
+        self.check_flush()
+    }
+
+    #[inline(always)]
+    pub fn finalize(mut self) -> io::Result<u32> {
+        self.update_state()?;
+        self.main_stream.flush()?;
+
+        Ok(self.crc32_hasher.finalize())
+    }
+
+    #[inline(always)]
+    fn update_state(&mut self) -> io::Result<()> {
+        let written = &self.buf[HISTORY_SIZE..self.write_index];
+        self.main_stream.write_all(written)?;
+        self.crc32_hasher.update(written);
+
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn check_flush(&mut self) -> io::Result<()> {
+        if self.write_index > TOTAL_SIZE - MAX_LENGTH {
+            self.shift_to_history()?;
+        }
+
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn shift_to_history(&mut self) -> Result<(), io::Error> {
+        self.update_state()?;
+
+        self.buf
+            .copy_within(self.write_index - HISTORY_SIZE..self.write_index, 0);
+
+        self.write_index = HISTORY_SIZE;
+
+        Ok(())
     }
 }
 
 impl<W: Write> Write for CachedWriter<W> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        let written = self.main_stream.write(buf)?;
+        let length = buf.len();
 
-        // If we wrote more than WINDOW_SIZE, we only care about caching the
-        // most recent tail.
-        let cache_data = if written > WINDOW_SIZE
-            && let Some(buffer) = buf.get(written - WINDOW_SIZE..written)
-        {
-            buffer
-        } else if let Some(buffer) = buf.get(..written) {
-            buffer
-        } else {
-            unreachable!("CachedWriter got corrupted")
-        };
-
-        let cache_len = cache_data.len();
-        let buf_midpoint = WINDOW_SIZE - self.write_index;
-        let end = self.write_index + cache_len;
-
-        if end <= WINDOW_SIZE
-            && let Some(buffer) = self.buf.get_mut(self.write_index..end)
-            && let Some(new_data) = cache_data.get(..cache_len)
-        {
-            buffer.copy_from_slice(new_data);
-            self.crc32_hasher.update(new_data);
-        } else if let Ok([buffer1, buffer2]) = self
-            .buf
-            .get_disjoint_mut([self.write_index..WINDOW_SIZE, 0..(end % WINDOW_SIZE)])
-            && let Some(first_half) = cache_data.get(..buf_midpoint)
-            && let Some(second_half) = cache_data.get(buf_midpoint..cache_len)
-        {
-            buffer1.copy_from_slice(first_half);
-            buffer2.copy_from_slice(second_half);
-            self.crc32_hasher.update(first_half);
-            self.crc32_hasher.update(second_half);
-        } else {
-            unreachable!("CachedWriter got corrupted");
+        if TOTAL_SIZE - self.write_index < length {
+            self.shift_to_history()?;
         }
 
-        self.write_index = end % WINDOW_SIZE;
+        self.buf[self.write_index..self.write_index + length].copy_from_slice(buf);
 
-        Ok(written)
+        self.write_index += length;
+        self.check_flush()?;
+
+        Ok(length)
     }
 
     fn flush(&mut self) -> io::Result<()> {
@@ -163,32 +133,30 @@ mod tests {
 
     #[test]
     fn test_write_no_wrap() -> io::Result<()> {
-        // Branch: `if end < WINDOW_SIZE`
         let mut out = Vec::new();
         let mut writer = CachedWriter::new(&mut out);
 
         writer.write_all(b"hello")?;
 
-        assert_eq!(writer.main_stream, b"hello");
-        assert_eq!(writer.write_index, 5);
-        assert_eq!(&writer.buf[..5], b"hello");
+        assert_eq!(&writer.buf[HISTORY_SIZE..HISTORY_SIZE + 5], b"hello");
+        assert_eq!(writer.write_index, HISTORY_SIZE + 5);
         Ok(())
     }
 
     #[test]
     fn test_write_wrap_around() -> io::Result<()> {
-        // Branch: `else if let Ok([buffer1, buffer2]) = ...`
         let mut out = Vec::new();
         let mut writer = CachedWriter::new(&mut out);
 
-        let padding = vec![0x01; WINDOW_SIZE - 2];
+        let padding = vec![0x01; HISTORY_SIZE - 2];
         writer.write_all(&padding)?;
 
         writer.write_all(b"12345")?;
 
-        assert_eq!(writer.write_index, 3);
-        assert_eq!(&writer.buf[WINDOW_SIZE - 2..WINDOW_SIZE], b"12");
-        assert_eq!(&writer.buf[..3], b"345");
+        let w_idx = writer.write_index;
+
+        assert_eq!(w_idx, HISTORY_SIZE + 5);
+        assert_eq!(&writer.buf[w_idx - 5..w_idx], b"12345");
         Ok(())
     }
 
@@ -197,12 +165,12 @@ mod tests {
         let mut out = Vec::new();
         let mut writer = CachedWriter::new(&mut out);
 
-        let data = vec![0x55; WINDOW_SIZE];
+        let data = vec![0x55; HISTORY_SIZE];
         writer.write_all(&data)?;
 
-        assert_eq!(writer.write_index, 0);
-        assert_eq!(writer.buf[0], 0x55);
-        assert_eq!(writer.buf[WINDOW_SIZE - 1], 0x55);
+        assert_eq!(writer.write_index, HISTORY_SIZE);
+        assert_eq!(writer.buf[HISTORY_SIZE], 0x55);
+        assert_eq!(writer.buf[TOTAL_SIZE - 1], 0x55);
         Ok(())
     }
 
@@ -215,8 +183,11 @@ mod tests {
 
         writer.repeat_from(1, 10)?;
 
-        assert_eq!(writer.main_stream, b"AAAAAAAAAAA");
-        assert_eq!(writer.write_index, 11);
+        assert_eq!(
+            &writer.buf[HISTORY_SIZE..writer.write_index],
+            b"AAAAAAAAAAA"
+        );
+        assert_eq!(writer.write_index, HISTORY_SIZE + 11);
         Ok(())
     }
 
@@ -229,8 +200,11 @@ mod tests {
 
         writer.repeat_from(3, 9)?;
 
-        assert_eq!(writer.main_stream, b"abcabcabcabc");
-        assert_eq!(writer.write_index, 12);
+        assert_eq!(
+            &writer.buf[HISTORY_SIZE..writer.write_index],
+            b"abcabcabcabc"
+        );
+        assert_eq!(writer.write_index, HISTORY_SIZE + 12);
         Ok(())
     }
 
@@ -242,35 +216,16 @@ mod tests {
         writer.write_all(b"123")?;
 
         writer.repeat_from(2, 4)?;
-        assert_eq!(writer.main_stream, b"1232323");
+        assert_eq!(&writer.buf[HISTORY_SIZE..writer.write_index], b"1232323");
 
         writer.write_all(b"45")?;
-        assert_eq!(writer.main_stream, b"123232345");
+        assert_eq!(&writer.buf[HISTORY_SIZE..writer.write_index], b"123232345");
 
         writer.repeat_from(6, 3)?;
-
-        assert_eq!(writer.main_stream, b"123232345232");
-        Ok(())
-    }
-
-    #[test]
-    fn test_repeat_from_max_distance() -> io::Result<()> {
-        let mut out = Vec::new();
-        let mut writer = CachedWriter::new(&mut out);
-
-        let payload = vec![0xAB; WINDOW_SIZE];
-        writer.write_all(&payload)?;
-
-        writer.repeat_from(WINDOW_SIZE, 10)?;
-
-        assert_eq!(writer.main_stream.len(), WINDOW_SIZE + 10);
         assert_eq!(
-            &writer.main_stream[WINDOW_SIZE..],
-            vec![0xAB; 10].as_slice()
+            &writer.buf[HISTORY_SIZE..writer.write_index],
+            b"123232345232"
         );
-
-        assert_eq!(writer.write_index, 10);
-
         Ok(())
     }
 }

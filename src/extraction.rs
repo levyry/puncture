@@ -206,7 +206,7 @@ impl<'a, R: BufRead> Extractor<'a, R> {
         let expected_crc32: u32 = self.data.read_bytes(4);
         // let expected_isize: u32 = self.data.read_bytes(4);
 
-        let calculated_crc = output.get_crc32();
+        let calculated_crc = output.finalize()?;
 
         if calculated_crc != expected_crc32 {
             unreachable!(
@@ -260,7 +260,7 @@ impl<'a, R: BufRead> Extractor<'a, R> {
             self.data.advance_bits_unchecked(literal_len);
 
             match literal {
-                0..256 => output.write_all(&[literal as u8])?,
+                0..256 => output.write_literal(literal as u8)?,
                 256 => break,
                 257..286 => {
                     let length_index: usize = (literal - 257).into();
