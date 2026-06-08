@@ -1,9 +1,7 @@
 use std::{
     ffi::CString,
-    io::{BufRead, Write},
+    io::{self, BufRead, Write},
 };
-
-use anyhow::{Result, bail};
 
 use crate::{bitreader::BitReader, cached_writer::CachedWriter};
 
@@ -108,17 +106,17 @@ impl<'a, R: BufRead> Extractor<'a, R> {
     ///
     /// If the header isn't per the RFC 1952 specification, or EOF is reached
     /// while parsing the header.
-    pub fn process_header(&mut self) -> Result<()> {
+    pub fn process_header(&mut self) -> io::Result<()> {
         let mut magic = [0; 2];
         self.data.read_raw_bytes(&mut magic);
 
         if magic != GZIP_MAGIC {
-            bail!("Incorrect magic: {}{}", magic[0], magic[1]);
+            unreachable!("Incorrect magic: {}{}", magic[0], magic[1]);
         }
 
         let cm: u8 = self.data.read_bytes(1);
         if cm != CM_DEFLATE {
-            bail!("Incorrect compression method: {cm}");
+            unreachable!("Incorrect compression method: {cm}");
         }
 
         let flags: u8 = self.data.read_bytes(1);
@@ -129,7 +127,7 @@ impl<'a, R: BufRead> Extractor<'a, R> {
         let fcomment = (flags & 0x10) != 0;
 
         if flags & 0xE0 != 0 {
-            bail!("Flag reserved bits aren't zeroed out: {flags}");
+            unreachable!("Flag reserved bits aren't zeroed out: {flags}");
         }
 
         // TODO: We skip MTIME, XFL and OS headers.
@@ -144,7 +142,10 @@ impl<'a, R: BufRead> Extractor<'a, R> {
         if fname {
             let mut name = Vec::new();
             self.data.read_until(0x00, &mut name)?;
-            self.file_name = Some(CString::from_vec_with_nul(name)?);
+            self.file_name = Some(
+                CString::from_vec_with_nul(name)
+                    .map_err(|_| std::io::Error::other("Corrupted filename"))?,
+            );
         }
 
         if fcomment {
@@ -166,7 +167,7 @@ impl<'a, R: BufRead> Extractor<'a, R> {
     ///
     /// If EOF is reached at an unexpected moment, or if the CRC-32
     /// hash or ISIZE counter aren't correct.
-    pub fn deflate(mut self, output: &mut impl Write) -> Result<()> {
+    pub fn deflate(mut self, output: &mut impl Write) -> io::Result<()> {
         // To track the LZ77 sliding window and CRC-32 hash, we wrap the stream
         let mut output = CachedWriter::new(output);
 
@@ -191,8 +192,8 @@ impl<'a, R: BufRead> Extractor<'a, R> {
 
                     self.decode_huffman(15, 15, &literals, &distances, &mut output)?;
                 }
-                0b11 => bail!("Hit reserved Huffman btype header: 11"),
-                _ => bail!("We only read two bits"),
+                0b11 => unreachable!("Hit reserved Huffman btype header: 11"),
+                _ => unreachable!("We only read two bits"),
             }
 
             if bfinal != 0 {
@@ -208,13 +209,13 @@ impl<'a, R: BufRead> Extractor<'a, R> {
         let calculated_crc = output.get_crc32();
 
         if calculated_crc != expected_crc32 {
-            bail!(
+            unreachable!(
                 "Calculated crc32 hash ({calculated_crc}) doesn't match expected ({expected_crc32})."
             );
         }
 
         // if calculated_isize != expected_isize {
-        //     bail!(
+        //     unreachable!(
         //         "Actual payload size ({calculated_isize}) doesn't match expected ({expected_isize})."
         //     )
         // }
@@ -222,15 +223,13 @@ impl<'a, R: BufRead> Extractor<'a, R> {
         Ok(())
     }
 
-    fn uncompressed_data<W: Write>(&mut self, output: &mut CachedWriter<W>) -> std::io::Result<()> {
+    fn uncompressed_data<W: Write>(&mut self, output: &mut CachedWriter<W>) -> io::Result<()> {
         self.data.align_to_byte();
         let len: u16 = self.data.read_bytes(2);
         let nlen: u16 = self.data.read_bytes(2);
 
         if len != !nlen {
-            return Err(std::io::Error::other(
-                "Member nlen isn't one's complement of len.",
-            ));
+            unreachable!("Member nlen isn't one's complement of len.",);
         }
 
         let mut payload = vec![0u8; len.into()];
@@ -245,37 +244,37 @@ impl<'a, R: BufRead> Extractor<'a, R> {
     #[inline(always)]
     fn decode_huffman<W: Write>(
         &mut self,
-        literal_length: u8,
-        distance_length: u8,
+        literal_max_length: u8,
+        distance_max_length: u8,
         literals: &[u16],
         distances: &[u16],
         output: &mut CachedWriter<W>,
-    ) -> Result<()> {
+    ) -> io::Result<()> {
         loop {
-            let literal_bits: u16 = self.data.peek_bits(literal_length);
+            let literal_bits: u16 = self.data.peek_bits(literal_max_length);
 
-            let symbol_mask = (1u16 << literal_length).saturating_sub(1);
+            let symbol_mask = (1u16 << literal_max_length) - 1;
             let packed_symbol = literals[usize::from(literal_bits & symbol_mask)];
-            let symbol = packed_symbol & 0x1FF;
-            let symbol_len = (packed_symbol >> 9) as u8;
-            self.data.advance_bits_unchecked(symbol_len);
+            let literal = packed_symbol & 0x1FF;
+            let literal_len = (packed_symbol >> 9) as u8;
+            self.data.advance_bits_unchecked(literal_len);
 
-            match symbol {
-                0..256 => output.write_all(&[symbol as u8])?,
+            match literal {
+                0..256 => output.write_all(&[literal as u8])?,
                 256 => break,
                 257..286 => {
-                    let length_index: usize = symbol.saturating_sub(257).into();
+                    let length_index: usize = (literal - 257).into();
 
                     let length_base = LENGTH_BASE_TABLE[length_index];
                     let length_offset_bits = LENGTH_OFFSET_BITS_TABLE[length_index];
 
                     let length_offset: u16 = self.data.read_bits(length_offset_bits);
 
-                    let length: usize = length_base.saturating_add(length_offset).into();
+                    let length: usize = (length_base + length_offset).into();
 
-                    let distance_bits: u16 = self.data.peek_bits(distance_length);
+                    let distance_bits: u16 = self.data.peek_bits(distance_max_length);
 
-                    let distance_mask = (1u16 << distance_length).saturating_sub(1);
+                    let distance_mask = (1u16 << distance_max_length) - 1;
                     let packed_distance = distances[usize::from(distance_bits & distance_mask)];
 
                     let distance_index = usize::from(packed_distance & 0x1FF);
@@ -287,11 +286,11 @@ impl<'a, R: BufRead> Extractor<'a, R> {
 
                     let distance_offset: u16 = self.data.read_bits(distance_offset_bits);
 
-                    let distance = distance_base.saturating_add(distance_offset).into();
+                    let distance = (distance_base + distance_offset).into();
 
                     output.repeat_from(distance, length)?;
                 }
-                _ => bail!("The decoded symbol is wrong: {symbol}"),
+                _ => unreachable!("The decoded symbol is wrong: {literal}"),
             }
         }
 
@@ -299,11 +298,11 @@ impl<'a, R: BufRead> Extractor<'a, R> {
     }
 
     fn decode_dynamic_tables(&mut self) -> ([u16; 32768], [u16; 32768]) {
-        let hlit = self.data.read_bits::<u16>(5).saturating_add(257);
-        let hdist = self.data.read_bits::<u8>(5).saturating_add(1);
-        let hclen = self.data.read_bits::<u8>(4).saturating_add(4);
+        let hlit = self.data.read_bits::<u16>(5) + 257;
+        let hdist = self.data.read_bits::<u16>(5) + 1;
+        let hclen = self.data.read_bits::<u8>(4) + 4;
 
-        let mut code_lengths_scratch: u64 = self.data.read_bits(hclen.saturating_mul(3));
+        let mut code_lengths_scratch: u64 = self.data.read_bits(hclen * 3);
 
         let mut codelength_lengths = [0u16; 19];
 
@@ -325,7 +324,7 @@ impl<'a, R: BufRead> Extractor<'a, R> {
         let mut lit_dist_table = [0u16; 286 + 32];
 
         let mut index = 0;
-        let symbol_count = usize::from(hlit.saturating_add(hdist as u16));
+        let symbol_count = (hlit + hdist).into();
         while index != symbol_count {
             let bits: u8 = self.data.peek_bits(7);
 
@@ -338,36 +337,36 @@ impl<'a, R: BufRead> Extractor<'a, R> {
             match symbol {
                 0..=15 => {
                     lit_dist_table[index] = symbol;
-                    index = index.saturating_add(1);
+                    index += 1;
                 }
                 16 => {
-                    let prev = lit_dist_table[index.saturating_sub(1)];
+                    let prev = lit_dist_table[index - 1];
 
-                    let repeat_length = (self.data.read_bits::<u8>(2).saturating_add(3)) as usize;
+                    let repeat_length = (self.data.read_bits::<u8>(2) + 3) as usize;
 
                     for repeat_index in 0..repeat_length {
-                        lit_dist_table[index.saturating_add(repeat_index)] = prev;
+                        lit_dist_table[index + repeat_index] = prev;
                     }
 
-                    index = index.saturating_add(repeat_length);
+                    index += repeat_length;
                 }
                 17 => {
-                    let repeat_length = (self.data.read_bits::<u8>(3).saturating_add(3)) as usize;
+                    let repeat_length = (self.data.read_bits::<u8>(3) + 3) as usize;
 
                     for repeat_index in 0..repeat_length {
-                        lit_dist_table[index.saturating_add(repeat_index)] = 0;
+                        lit_dist_table[index + repeat_index] = 0;
                     }
 
-                    index = index.saturating_add(repeat_length);
+                    index += repeat_length;
                 }
                 18 => {
-                    let repeat_length = (self.data.read_bits::<u8>(7).saturating_add(11)) as usize;
+                    let repeat_length = (self.data.read_bits::<u8>(7) + 11) as usize;
 
                     for repeat_index in 0..repeat_length {
-                        lit_dist_table[index.saturating_add(repeat_index)] = 0;
+                        lit_dist_table[index + repeat_index] = 0;
                     }
 
-                    index = index.saturating_add(repeat_length);
+                    index += repeat_length;
                 }
                 _ => unreachable!("Wrong symbol while building lit/dist table: {symbol}"),
             }
@@ -375,16 +374,12 @@ impl<'a, R: BufRead> Extractor<'a, R> {
 
         let (lit_lengths, dist_lengths) = lit_dist_table.split_at(hlit.into());
 
-        let mut lit_codes = vec![0u16; usize::from(hlit)];
-
+        let mut lit_codes = vec![0u16; hlit.into()];
         build_huff_codes(lit_lengths, &mut lit_codes);
-
         let lit_table = build_lut::<32768>(lit_lengths, &lit_codes);
 
-        let mut dist_codes = vec![0u16; usize::from(hdist)];
-
+        let mut dist_codes = vec![0u16; hdist.into()];
         build_huff_codes(dist_lengths, &mut dist_codes);
-
         let dist_table = build_lut::<32768>(dist_lengths, &dist_codes);
 
         (lit_table, dist_table)
@@ -419,7 +414,7 @@ fn build_huff_codes(lengths: &[u16], codes: &mut [u16]) {
         if code_length != 0 {
             let code = next_code[code_length as usize].reverse_bits() >> (16 - code_length);
             codes[index] = code;
-            next_code[code_length as usize] = next_code[code_length as usize].saturating_add(1);
+            next_code[code_length as usize] = next_code[code_length as usize] + 1;
         }
     }
 }
@@ -438,7 +433,7 @@ fn build_lut<const LUT: usize>(lengths: &[u16], codes: &[u16]) -> [u16; LUT] {
 
         while index < LUT {
             table[index] = (length << 9) | symbol as u16;
-            index = index.saturating_add(step);
+            index += step;
         }
     }
 

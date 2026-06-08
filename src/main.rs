@@ -1,15 +1,14 @@
 use std::{
     fs::File,
-    io::{BufRead, BufReader, BufWriter, IsTerminal, Write},
+    io::{self, BufRead, BufReader, BufWriter, IsTerminal, Write},
     path::Path,
 };
 
-use anyhow::{Context, Result};
 use clap::{Arg, ArgAction, ArgMatches, Command};
 
 use puncture::{bitreader::BitReader, extraction::Extractor};
 
-fn main() -> Result<(), anyhow::Error> {
+fn main() -> Result<(), io::Error> {
     let args = get_cli_args()?;
 
     let is_extract = args.get_flag("extract");
@@ -46,13 +45,16 @@ fn get_output_stream(
     cli_input: Option<&String>,
     cli_output: Option<&String>,
     extractor: &Extractor<'_, impl BufRead>,
-) -> Result<Box<dyn Write>> {
+) -> io::Result<Box<dyn Write>> {
     Ok(if print_to_stdout {
         Box::new(BufWriter::new(std::io::stdout()))
     } else if let Some(requested_file_name) = cli_output {
         Box::new(BufWriter::new(File::create(requested_file_name)?))
     } else if let Some(original_file_name) = extractor.get_file_name() {
-        let name = original_file_name.clone().into_string()?;
+        let name = original_file_name
+            .clone()
+            .into_string()
+            .map_err(|_| io::Error::other("Original file name isn't valid UTF8"))?;
         Box::new(BufWriter::new(File::create_new(name)?))
     } else if let Some(input_path) = cli_input
         && input_path != "-"
@@ -61,7 +63,7 @@ fn get_output_stream(
             Path::new(&input_path)
                 .file_stem()
                 .map(Path::new)
-                .context("Somehow there was no file name")?,
+                .expect("Somehow there was no file name"),
         )?))
     } else {
         // If the stdout flag wasn't given, there was no explicit output and no explicit input, we'll use a placeholder
@@ -69,7 +71,7 @@ fn get_output_stream(
     })
 }
 
-fn get_cli_args() -> Result<ArgMatches> {
+fn get_cli_args() -> io::Result<ArgMatches> {
     let mut cmd = Command::new("puncture")
         .version("0.1.0")
         .about("Compress or uncompress files using the gzip format.")
@@ -110,10 +112,6 @@ fn get_cli_args() -> Result<ArgMatches> {
 
     if std::env::args().len() == 1 && std::io::stdin().is_terminal() {
         cmd.print_help()?;
-        #[expect(
-            clippy::exit,
-            reason = "This function is only called at the beginning of main"
-        )]
         std::process::exit(0);
     }
 

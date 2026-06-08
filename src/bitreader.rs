@@ -75,7 +75,7 @@ impl<R: BufRead> BitReader<R> {
     #[inline(always)]
     pub const fn advance_bits_unchecked(&mut self, num_of_bits: u8) {
         self.bit_store >>= num_of_bits;
-        self.num_of_stored_bits = self.num_of_stored_bits.saturating_sub(num_of_bits);
+        self.num_of_stored_bits -= num_of_bits;
     }
 
     /// Read at most 64 bits at a time from the underlying stream.
@@ -99,7 +99,7 @@ impl<R: BufRead> BitReader<R> {
     fn fill_inner_buffer(&mut self) {
         let buf = self.data.fill_buf().expect("Failed to fill buffer");
 
-        let space_for_bits: usize = u8::saturating_sub(128, self.num_of_stored_bits).into();
+        let space_for_bits: usize = (128u8 - self.num_of_stored_bits).into();
 
         let bytes_to_process = buf.len().min(space_for_bits / 8);
 
@@ -110,9 +110,7 @@ impl<R: BufRead> BitReader<R> {
         let bits = u128::from_le_bytes(scratch);
 
         self.bit_store |= bits << self.num_of_stored_bits;
-        self.num_of_stored_bits = self
-            .num_of_stored_bits
-            .saturating_add(bytes_to_process as u8 * 8);
+        self.num_of_stored_bits += bytes_to_process as u8 * 8;
 
         self.data.consume(bytes_to_process);
     }
@@ -130,8 +128,7 @@ impl<R: BufRead> BitReader<R> {
         T: TryFrom<u128>,
         T::Error: std::fmt::Debug,
     {
-        let bits = num_of_bytes.saturating_mul(8);
-        self.read_bits(bits)
+        self.read_bits(num_of_bytes * 8)
     }
 
     /// Discards any remaining bits in the current byte to align with the next
@@ -141,7 +138,7 @@ impl<R: BufRead> BitReader<R> {
         let leftover_bits = self.num_of_stored_bits % 8;
         if leftover_bits > 0 {
             self.bit_store >>= leftover_bits;
-            self.num_of_stored_bits = self.num_of_stored_bits.saturating_sub(leftover_bits);
+            self.num_of_stored_bits -= leftover_bits;
         }
     }
 
@@ -152,14 +149,14 @@ impl<R: BufRead> BitReader<R> {
     /// See [`Self::read_bits`].
     #[inline]
     pub fn skip_bytes(&mut self, num_of_bytes: u64) {
-        let mut discard_bits = num_of_bytes.saturating_mul(8);
+        let mut discard_bits = num_of_bytes * 8;
         loop {
             if discard_bits < 65 {
                 let _x: u64 = self.read_bits(discard_bits.try_into().expect("32bit system moment"));
                 return;
             }
             let _x: u64 = self.read_bits(64);
-            discard_bits = discard_bits.saturating_sub(64);
+            discard_bits -= 64;
         }
     }
 
@@ -178,7 +175,7 @@ impl<R: BufRead> BitReader<R> {
                     .expect("We masked for the bottom 8 bits");
 
                 self.bit_store >>= 8;
-                self.num_of_stored_bits = self.num_of_stored_bits.saturating_sub(8);
+                self.num_of_stored_bits -= 8;
             } else {
                 let mut temp = [0u8; 1];
                 self.data

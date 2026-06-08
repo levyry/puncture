@@ -9,7 +9,6 @@
 /// There are some LZ77 specific utility functions for making look-back easier.
 use std::io::{self, Write};
 
-use anyhow::{Result, anyhow, bail};
 use crc32fast::Hasher;
 
 const MAX_LENGTH: usize = 258;
@@ -52,22 +51,20 @@ impl<W: Write> CachedWriter<W> {
         clippy::indexing_slicing,
         reason = "The length can be at most 258 per RFC1951."
     )]
-    pub fn repeat_from(&mut self, distance: usize, length: usize) -> Result<()> {
+    pub fn repeat_from(&mut self, distance: usize, length: usize) -> io::Result<()> {
         if distance == 0 {
-            bail!("LZ77 distance cannot be zero")
+            panic!("LZ77 distance cannot be zero")
         }
 
         if distance > WINDOW_SIZE {
-            bail!("LZ77 distance larger than cache window");
+            panic!("LZ77 distance larger than cache window");
         }
 
         let mut scratch = [0u8; MAX_LENGTH];
 
-        let start_offset = WINDOW_SIZE.saturating_sub(distance);
+        let start = (self.write_index + WINDOW_SIZE - distance) % WINDOW_SIZE;
 
-        let start = self.write_index.saturating_add(start_offset) % WINDOW_SIZE;
-
-        let end = start.saturating_add(distance.min(length)) % WINDOW_SIZE;
+        let end = (start + distance.min(length)) % WINDOW_SIZE;
 
         let mut amount_wrote = 0;
 
@@ -81,22 +78,20 @@ impl<W: Write> CachedWriter<W> {
         {
             let start_to_back_len = start_to_back.len();
             let front_to_end_len = front_to_end.len();
-            amount_wrote = start_to_back_len.saturating_add(front_to_end_len);
+            amount_wrote = start_to_back_len + front_to_end_len;
 
             scratch[..start_to_back_len].copy_from_slice(start_to_back);
             scratch[start_to_back_len..amount_wrote].copy_from_slice(front_to_end);
         }
 
         while amount_wrote != length {
-            let chunk_size = usize::min(amount_wrote, length.saturating_sub(amount_wrote));
+            let chunk_size = usize::min(amount_wrote, length - amount_wrote);
 
             scratch.copy_within(0..chunk_size, amount_wrote);
-            amount_wrote = amount_wrote.saturating_add(chunk_size);
+            amount_wrote += chunk_size;
         }
 
-        self.write_all(&scratch[..amount_wrote])?;
-
-        Ok(())
+        self.write_all(&scratch[..amount_wrote])
     }
 
     pub fn get_crc32(self) -> u32 {
@@ -111,19 +106,18 @@ impl<W: Write> Write for CachedWriter<W> {
         // If we wrote more than WINDOW_SIZE, we only care about caching the
         // most recent tail.
         let cache_data = if written > WINDOW_SIZE
-            && let Some(buffer) = buf.get(written.saturating_sub(WINDOW_SIZE)..written)
+            && let Some(buffer) = buf.get(written - WINDOW_SIZE..written)
         {
             buffer
         } else if let Some(buffer) = buf.get(..written) {
             buffer
         } else {
-            return Err(io::Error::other(anyhow!("CachedWriter got corrupted")));
+            unreachable!("CachedWriter got corrupted")
         };
 
         let cache_len = cache_data.len();
-        let buf_midpoint = WINDOW_SIZE.saturating_sub(self.write_index);
-
-        let end = self.write_index.saturating_add(cache_len);
+        let buf_midpoint = WINDOW_SIZE - self.write_index;
+        let end = self.write_index + cache_len;
 
         if end <= WINDOW_SIZE
             && let Some(buffer) = self.buf.get_mut(self.write_index..end)
@@ -134,15 +128,15 @@ impl<W: Write> Write for CachedWriter<W> {
         } else if let Ok([buffer1, buffer2]) = self
             .buf
             .get_disjoint_mut([self.write_index..WINDOW_SIZE, 0..(end % WINDOW_SIZE)])
-            && let Some(new_data1) = cache_data.get(..buf_midpoint)
-            && let Some(new_data2) = cache_data.get(buf_midpoint..cache_len)
+            && let Some(first_half) = cache_data.get(..buf_midpoint)
+            && let Some(second_half) = cache_data.get(buf_midpoint..cache_len)
         {
-            buffer1.copy_from_slice(new_data1);
-            buffer2.copy_from_slice(new_data2);
-            self.crc32_hasher.update(new_data1);
-            self.crc32_hasher.update(new_data2);
+            buffer1.copy_from_slice(first_half);
+            buffer2.copy_from_slice(second_half);
+            self.crc32_hasher.update(first_half);
+            self.crc32_hasher.update(second_half);
         } else {
-            return Err(io::Error::other(anyhow!("CachedWriter got corrupted")));
+            unreachable!("CachedWriter got corrupted");
         }
 
         self.write_index = end % WINDOW_SIZE;
@@ -168,7 +162,7 @@ mod tests {
     // ---------------------------------------------------------
 
     #[test]
-    fn test_write_no_wrap() -> Result<()> {
+    fn test_write_no_wrap() -> io::Result<()> {
         // Branch: `if end < WINDOW_SIZE`
         let mut out = Vec::new();
         let mut writer = CachedWriter::new(&mut out);
@@ -182,7 +176,7 @@ mod tests {
     }
 
     #[test]
-    fn test_write_wrap_around() -> Result<()> {
+    fn test_write_wrap_around() -> io::Result<()> {
         // Branch: `else if let Ok([buffer1, buffer2]) = ...`
         let mut out = Vec::new();
         let mut writer = CachedWriter::new(&mut out);
@@ -199,7 +193,7 @@ mod tests {
     }
 
     #[test]
-    fn test_write_exact_window_size() -> Result<()> {
+    fn test_write_exact_window_size() -> io::Result<()> {
         let mut out = Vec::new();
         let mut writer = CachedWriter::new(&mut out);
 
@@ -213,7 +207,7 @@ mod tests {
     }
 
     #[test]
-    fn test_lz77_run_length_encoding() -> Result<()> {
+    fn test_lz77_run_length_encoding() -> io::Result<()> {
         let mut out = Vec::new();
         let mut writer = CachedWriter::new(&mut out);
 
@@ -227,7 +221,7 @@ mod tests {
     }
 
     #[test]
-    fn test_lz77_pattern_repetition() -> Result<()> {
+    fn test_lz77_pattern_repetition() -> io::Result<()> {
         let mut out = Vec::new();
         let mut writer = CachedWriter::new(&mut out);
 
@@ -241,7 +235,7 @@ mod tests {
     }
 
     #[test]
-    fn test_continuous_write_and_repeat_fixed() -> Result<()> {
+    fn test_continuous_write_and_repeat_fixed() -> io::Result<()> {
         let mut out = Vec::new();
         let mut writer = CachedWriter::new(&mut out);
 
@@ -260,7 +254,7 @@ mod tests {
     }
 
     #[test]
-    fn test_repeat_from_max_distance() -> Result<()> {
+    fn test_repeat_from_max_distance() -> io::Result<()> {
         let mut out = Vec::new();
         let mut writer = CachedWriter::new(&mut out);
 
