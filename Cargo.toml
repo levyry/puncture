@@ -53,9 +53,10 @@ try_err = "deny"
 undocumented_unsafe_blocks = "deny"
 
 # Allowlist
-unusual_byte_groupings = "allow" # Since Huffman uses MSB/LSB in a mixed way
+unusual_byte_groupings = "allow"   # Since Huffman uses MSB/LSB in a mixed way
 inline_always = "allow"
 missing_panics_doc = "allow"
+cast_possible_truncation = "allow"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

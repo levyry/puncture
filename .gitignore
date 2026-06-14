@@ -5,3 +5,5 @@
 profile.json.gz
 
 /perf_bin
+
+tests/data/dynamic/silesia.tar.gz

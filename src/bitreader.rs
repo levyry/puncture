@@ -57,7 +57,7 @@ impl<R: BufRead> BitReader<R> {
             self.fill_inner_buffer();
         }
 
-        self.bit_store & (1 << num_of_bits) - 1
+        self.bit_store & ((1 << num_of_bits) - 1)
     }
 
     /// Advances the underlying stream by `num_of_bits` without checks.

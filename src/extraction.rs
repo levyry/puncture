@@ -1,5 +1,6 @@
 use std::{
     ffi::CString,
+    hint::{likely, unlikely},
     io::{self, BufRead, Write},
 };
 
@@ -259,38 +260,39 @@ impl<'a, R: BufRead> Extractor<'a, R> {
             let literal_len = (packed_symbol >> 9) as u8;
             self.data.advance_bits_unchecked(literal_len);
 
-            match literal {
-                0..256 => output.write_literal(literal as u8)?,
-                256 => break,
-                257..286 => {
-                    let length_index: usize = (literal - 257).into();
+            if likely(literal < 256) {
+                output.write_literal(literal as u8)?;
+            } else if likely(literal > 256) {
+                let length_index: usize = (literal - 257).into();
 
-                    let length_base = LENGTH_BASE_TABLE[length_index];
-                    let length_offset_bits = LENGTH_OFFSET_BITS_TABLE[length_index];
+                let length_base = LENGTH_BASE_TABLE[length_index];
+                let length_offset_bits = LENGTH_OFFSET_BITS_TABLE[length_index];
 
-                    let length_offset: u16 = self.data.read_bits(length_offset_bits) as u16;
+                let length_offset: u16 = self.data.read_bits(length_offset_bits) as u16;
 
-                    let length: usize = (length_base + length_offset).into();
+                let length: usize = (length_base + length_offset).into();
 
-                    let distance_bits: u16 = self.data.peek_bits(distance_max_length) as u16;
+                let distance_bits: u16 = self.data.peek_bits(distance_max_length) as u16;
 
-                    let distance_mask = (1u16 << distance_max_length) - 1;
-                    let packed_distance = distances[usize::from(distance_bits & distance_mask)];
+                let distance_mask = (1u16 << distance_max_length) - 1;
+                let packed_distance = distances[usize::from(distance_bits & distance_mask)];
 
-                    let distance_index = usize::from(packed_distance & 0x1FF);
-                    let distance_len = (packed_distance >> 9) as u8;
-                    self.data.advance_bits_unchecked(distance_len);
+                let distance_index = usize::from(packed_distance & 0x1FF);
+                let distance_len = (packed_distance >> 9) as u8;
+                self.data.advance_bits_unchecked(distance_len);
 
-                    let distance_base = DISTANCE_BASE_TABLE[distance_index];
-                    let distance_offset_bits = DISTANCE_OFFSET_BITS_TABLE[distance_index];
+                let distance_base = DISTANCE_BASE_TABLE[distance_index];
+                let distance_offset_bits = DISTANCE_OFFSET_BITS_TABLE[distance_index];
 
-                    let distance_offset: u16 = self.data.read_bits(distance_offset_bits) as u16;
+                let distance_offset: u16 = self.data.read_bits(distance_offset_bits) as u16;
 
-                    let distance = (distance_base + distance_offset).into();
+                let distance = (distance_base + distance_offset).into();
 
-                    output.repeat_from(distance, length)?;
-                }
-                _ => unreachable!("The decoded symbol is wrong: {literal}"),
+                output.repeat_from(distance, length)?;
+            } else if unlikely(literal == 256) {
+                break;
+            } else {
+                unreachable!();
             }
         }
 
@@ -414,7 +416,7 @@ fn build_huff_codes(lengths: &[u16], codes: &mut [u16]) {
         if code_length != 0 {
             let code = next_code[code_length as usize].reverse_bits() >> (16 - code_length);
             codes[index] = code;
-            next_code[code_length as usize] = next_code[code_length as usize] + 1;
+            next_code[code_length as usize] += 1;
         }
     }
 }
