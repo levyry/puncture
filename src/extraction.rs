@@ -114,12 +114,12 @@ impl<'a, R: BufRead> Extractor<'a, R> {
             unreachable!("Incorrect magic: {}{}", magic[0], magic[1]);
         }
 
-        let cm: u8 = self.data.read_bytes(1);
+        let cm: u8 = self.data.read_bytes(1) as u8;
         if cm != CM_DEFLATE {
             unreachable!("Incorrect compression method: {cm}");
         }
 
-        let flags: u8 = self.data.read_bytes(1);
+        let flags: u8 = self.data.read_bytes(1) as u8;
 
         let fhcrc = (flags & 0x02) != 0;
         let fextra = (flags & 0x04) != 0;
@@ -131,11 +131,11 @@ impl<'a, R: BufRead> Extractor<'a, R> {
         }
 
         // TODO: We skip MTIME, XFL and OS headers.
-        let _mtime: u32 = self.data.read_bytes(4);
-        let _xfl_and_os: u16 = self.data.read_bytes(2);
+        let _mtime: u32 = self.data.read_bytes(4) as u32;
+        let _xfl_and_os: u16 = self.data.read_bytes(2) as u16;
 
         if fextra {
-            let xlen: u16 = self.data.read_bytes(2);
+            let xlen: u16 = self.data.read_bytes(2) as u16;
             self.data.skip_bytes(xlen.into());
         }
 
@@ -156,7 +156,7 @@ impl<'a, R: BufRead> Extractor<'a, R> {
         // TODO: Currently, the crc16 field is ignored if it exists.
         // I could calculate this, but then I would need to keep a
         // seperate buffer for all the header fields I read in.
-        let mut _crc16: Option<u16> = fhcrc.then(|| self.data.read_bytes(2));
+        let mut _crc16: Option<u16> = fhcrc.then(|| self.data.read_bytes(2) as u16);
 
         Ok(())
     }
@@ -172,8 +172,8 @@ impl<'a, R: BufRead> Extractor<'a, R> {
         let mut output = CachedWriter::new(output);
 
         loop {
-            let bfinal: u8 = self.data.read_bits(1);
-            let btype: u8 = self.data.read_bits(2);
+            let bfinal: u8 = self.data.read_bits(1) as u8;
+            let btype: u8 = self.data.read_bits(2) as u8;
 
             match btype {
                 // No compression
@@ -203,8 +203,8 @@ impl<'a, R: BufRead> Extractor<'a, R> {
 
         self.data.align_to_byte();
 
-        let expected_crc32: u32 = self.data.read_bytes(4);
-        // let expected_isize: u32 = self.data.read_bytes(4);
+        let expected_crc32: u32 = self.data.read_bytes(4) as u32;
+        // let expected_isize: u32 = self.data.read_bytes(4) as u32;
 
         let calculated_crc = output.finalize()?;
 
@@ -225,8 +225,8 @@ impl<'a, R: BufRead> Extractor<'a, R> {
 
     fn uncompressed_data<W: Write>(&mut self, output: &mut CachedWriter<W>) -> io::Result<()> {
         self.data.align_to_byte();
-        let len: u16 = self.data.read_bytes(2);
-        let nlen: u16 = self.data.read_bytes(2);
+        let len: u16 = self.data.read_bytes(2) as u16;
+        let nlen: u16 = self.data.read_bytes(2) as u16;
 
         if len != !nlen {
             unreachable!("Member nlen isn't one's complement of len.",);
@@ -251,7 +251,7 @@ impl<'a, R: BufRead> Extractor<'a, R> {
         output: &mut CachedWriter<W>,
     ) -> io::Result<()> {
         loop {
-            let literal_bits: u16 = self.data.peek_bits(literal_max_length);
+            let literal_bits: u16 = self.data.peek_bits(literal_max_length) as u16;
 
             let symbol_mask = (1u16 << literal_max_length) - 1;
             let packed_symbol = literals[usize::from(literal_bits & symbol_mask)];
@@ -268,11 +268,11 @@ impl<'a, R: BufRead> Extractor<'a, R> {
                     let length_base = LENGTH_BASE_TABLE[length_index];
                     let length_offset_bits = LENGTH_OFFSET_BITS_TABLE[length_index];
 
-                    let length_offset: u16 = self.data.read_bits(length_offset_bits);
+                    let length_offset: u16 = self.data.read_bits(length_offset_bits) as u16;
 
                     let length: usize = (length_base + length_offset).into();
 
-                    let distance_bits: u16 = self.data.peek_bits(distance_max_length);
+                    let distance_bits: u16 = self.data.peek_bits(distance_max_length) as u16;
 
                     let distance_mask = (1u16 << distance_max_length) - 1;
                     let packed_distance = distances[usize::from(distance_bits & distance_mask)];
@@ -284,7 +284,7 @@ impl<'a, R: BufRead> Extractor<'a, R> {
                     let distance_base = DISTANCE_BASE_TABLE[distance_index];
                     let distance_offset_bits = DISTANCE_OFFSET_BITS_TABLE[distance_index];
 
-                    let distance_offset: u16 = self.data.read_bits(distance_offset_bits);
+                    let distance_offset: u16 = self.data.read_bits(distance_offset_bits) as u16;
 
                     let distance = (distance_base + distance_offset).into();
 
@@ -298,11 +298,11 @@ impl<'a, R: BufRead> Extractor<'a, R> {
     }
 
     fn decode_dynamic_tables(&mut self) -> ([u16; 32768], [u16; 32768]) {
-        let hlit = self.data.read_bits::<u16>(5) + 257;
-        let hdist = self.data.read_bits::<u16>(5) + 1;
-        let hclen = self.data.read_bits::<u8>(4) + 4;
+        let hlit = self.data.read_bits(5) as u16 + 257;
+        let hdist = self.data.read_bits(5) as u16 + 1;
+        let hclen = self.data.read_bits(4) as u8 + 4;
 
-        let mut code_lengths_scratch: u64 = self.data.read_bits(hclen * 3);
+        let mut code_lengths_scratch: u64 = self.data.read_bits(hclen * 3) as u64;
 
         let mut codelength_lengths = [0u16; 19];
 
@@ -326,7 +326,7 @@ impl<'a, R: BufRead> Extractor<'a, R> {
         let mut index = 0;
         let symbol_count = (hlit + hdist).into();
         while index != symbol_count {
-            let bits: u8 = self.data.peek_bits(7);
+            let bits: u8 = self.data.peek_bits(7) as u8;
 
             let packed_value = codelength_lut[(bits & 0x7F) as usize];
             let symbol: u16 = packed_value & 0x1FF;
@@ -342,7 +342,7 @@ impl<'a, R: BufRead> Extractor<'a, R> {
                 16 => {
                     let prev = lit_dist_table[index - 1];
 
-                    let repeat_length = (self.data.read_bits::<u8>(2) + 3) as usize;
+                    let repeat_length = (self.data.read_bits(2) + 3) as usize;
 
                     for repeat_index in 0..repeat_length {
                         lit_dist_table[index + repeat_index] = prev;
@@ -351,7 +351,7 @@ impl<'a, R: BufRead> Extractor<'a, R> {
                     index += repeat_length;
                 }
                 17 => {
-                    let repeat_length = (self.data.read_bits::<u8>(3) + 3) as usize;
+                    let repeat_length = (self.data.read_bits(3) + 3) as usize;
 
                     for repeat_index in 0..repeat_length {
                         lit_dist_table[index + repeat_index] = 0;
@@ -360,7 +360,7 @@ impl<'a, R: BufRead> Extractor<'a, R> {
                     index += repeat_length;
                 }
                 18 => {
-                    let repeat_length = (self.data.read_bits::<u8>(7) + 11) as usize;
+                    let repeat_length = (self.data.read_bits(7) + 11) as usize;
 
                     for repeat_index in 0..repeat_length {
                         lit_dist_table[index + repeat_index] = 0;

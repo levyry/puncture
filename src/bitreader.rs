@@ -51,21 +51,13 @@ impl<R: BufRead> BitReader<R> {
     ///
     /// If filling the inner buffer fails, like because of hitting EOF.
     #[inline(always)]
-    pub fn peek_bits<T>(&mut self, num_of_bits: u8) -> T
-    where
-        T: TryFrom<u128>,
-        T::Error: Debug,
-    {
+    pub fn peek_bits(&mut self, num_of_bits: u8) -> u128 {
         // We must advance the stream to be able to peek
-        while self.num_of_stored_bits < num_of_bits {
+        if self.num_of_stored_bits < num_of_bits {
             self.fill_inner_buffer();
         }
 
-        let mask: u128 = (1 << num_of_bits) - 1;
-
-        (self.bit_store & mask)
-            .try_into()
-            .expect("We always mask the right amount of bits.")
+        self.bit_store & (1 << num_of_bits) - 1
     }
 
     /// Advances the underlying stream by `num_of_bits` without checks.
@@ -85,11 +77,7 @@ impl<R: BufRead> BitReader<R> {
     /// If `num_of_bits` is greater than 64, or if filling the underlying
     /// stream fails, like because of hitting EOF.
     #[inline(always)]
-    pub fn read_bits<T>(&mut self, num_of_bits: u8) -> T
-    where
-        T: TryFrom<u128>,
-        T::Error: Debug,
-    {
+    pub fn read_bits(&mut self, num_of_bits: u8) -> u128 {
         let result = self.peek_bits(num_of_bits);
         self.advance_bits_unchecked(num_of_bits);
         result
@@ -123,11 +111,7 @@ impl<R: BufRead> BitReader<R> {
     ///
     /// See [`Self::read_bits`].
     #[inline(always)]
-    pub fn read_bytes<T>(&mut self, num_of_bytes: u8) -> T
-    where
-        T: TryFrom<u128>,
-        T::Error: std::fmt::Debug,
-    {
+    pub fn read_bytes(&mut self, num_of_bytes: u8) -> u128 {
         self.read_bits(num_of_bytes * 8)
     }
 
@@ -152,10 +136,10 @@ impl<R: BufRead> BitReader<R> {
         let mut discard_bits = num_of_bytes * 8;
         loop {
             if discard_bits < 65 {
-                let _x: u64 = self.read_bits(discard_bits.try_into().expect("32bit system moment"));
+                let _x = self.read_bits(discard_bits.try_into().expect("32bit system moment"));
                 return;
             }
-            let _x: u64 = self.read_bits(64);
+            let _x = self.read_bits(64);
             discard_bits -= 64;
         }
     }
@@ -201,10 +185,10 @@ mod tests {
     fn test_read_basic_bits() {
         let mut br = create_reader(&[0b1100_1010]);
 
-        let bits1: u8 = br.read_bits(4);
+        let bits1: u8 = br.read_bits(4) as u8;
         assert_eq!(bits1, 0b1010);
 
-        let bits2: u8 = br.read_bits(4);
+        let bits2: u8 = br.read_bits(4) as u8;
         assert_eq!(bits2, 0b1100);
     }
 
@@ -212,16 +196,16 @@ mod tests {
     fn test_peek_basic_bits() {
         let mut br = create_reader(&[0b1100_1010]);
 
-        let bits1: u8 = br.peek_bits(4);
+        let bits1: u8 = br.peek_bits(4) as u8;
         assert_eq!(bits1, 0b1010);
 
-        let bits2: u8 = br.read_bits(4);
+        let bits2: u8 = br.read_bits(4) as u8;
         assert_eq!(bits2, 0b1010);
 
-        let bits3: u8 = br.peek_bits(4);
+        let bits3: u8 = br.peek_bits(4) as u8;
         assert_eq!(bits3, 0b1100);
 
-        let bits4: u8 = br.read_bits(4);
+        let bits4: u8 = br.read_bits(4) as u8;
         assert_eq!(bits4, 0b1100);
     }
 
@@ -229,12 +213,12 @@ mod tests {
     fn test_advance_basic_bits() {
         let mut br = create_reader(&[0b1100_1010]);
 
-        let bits1: u8 = br.peek_bits(4);
+        let bits1: u8 = br.peek_bits(4) as u8;
         assert_eq!(bits1, 0b1010);
 
         br.advance_bits_unchecked(4);
 
-        let bits2: u8 = br.peek_bits(4);
+        let bits2: u8 = br.peek_bits(4) as u8;
         assert_eq!(bits2, 0b1100);
     }
 
@@ -244,10 +228,10 @@ mod tests {
         let mut br = create_reader(&[0x33, 0x55]);
 
         // Combined LSB first: 0101_0011_0011 -> 0x533
-        let bits: u16 = br.read_bits(12);
+        let bits: u16 = br.read_bits(12) as u16;
         assert_eq!(bits, 0x533);
 
-        let remaining: u8 = br.read_bits(4);
+        let remaining: u8 = br.read_bits(4) as u8;
         assert_eq!(remaining, 0b0101);
     }
 
@@ -256,10 +240,10 @@ mod tests {
         // [0xFF, 0xAA] -> [1111_1111, 1010_1010]
         let mut br = create_reader(&[0xFF, 0xAA]);
 
-        let _: u8 = br.read_bits(3);
+        let _: u8 = br.read_bits(3) as u8;
         br.align_to_byte();
 
-        let next_byte: u8 = br.read_bits(8);
+        let next_byte: u8 = br.read_bits(8) as u8;
         assert_eq!(next_byte, 0xAA);
     }
 
@@ -267,7 +251,7 @@ mod tests {
     fn test_read_dynamic_bytes() {
         let mut br = create_reader(&[0xAA, 0xBB, 0xCC, 0xDD]);
 
-        let val: u32 = br.read_bytes(3);
+        let val: u32 = br.read_bytes(3) as u32;
         assert_eq!(val, 0xCC_BB_AA);
     }
 
@@ -275,11 +259,11 @@ mod tests {
     fn test_skip_bytes() {
         let mut br = create_reader(&[0x01, 0x02, 0x03, 0x04, 0x05, 0x06]);
 
-        let _: u8 = br.read_bytes(1);
+        let _: u8 = br.read_bytes(1) as u8;
 
         br.skip_bytes(4);
 
-        let val: u8 = br.read_bytes(1);
+        let val: u8 = br.read_bytes(1) as u8;
         assert_eq!(val, 0x06);
     }
 }
