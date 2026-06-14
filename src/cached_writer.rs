@@ -36,25 +36,26 @@ impl<W: Write> CachedWriter<W> {
     #[inline(always)]
     pub fn repeat_from(&mut self, distance: usize, length: usize) {
         let start = self.write_index - distance;
-        let end = start + length;
 
-        // We might copy garbage here, but overwrite it in the while loop later
-        self.buf.copy_within(start..end, self.write_index);
-        self.write_index += length.min(distance);
+        if distance >= length {
+            self.buf
+                .copy_within(start..start + length, self.write_index);
+        } else {
+            self.buf
+                .copy_within(start..start + distance, self.write_index);
+            let mut copied = distance;
 
-        if length > distance {
-            let mut amount_wrote = distance;
-
-            while amount_wrote != length {
-                let chunk_size = amount_wrote.min(length - amount_wrote);
-                let end = start + chunk_size;
-
-                self.buf.copy_within(start..end, self.write_index);
-
-                self.write_index += chunk_size;
-                amount_wrote += chunk_size;
+            while copied < length {
+                let to_copy = copied.min(length - copied);
+                self.buf.copy_within(
+                    self.write_index..self.write_index + to_copy,
+                    self.write_index + copied,
+                );
+                copied += to_copy;
             }
         }
+
+        self.write_index += length;
     }
 
     #[inline(always)]

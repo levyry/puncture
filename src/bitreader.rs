@@ -62,6 +62,16 @@ impl<R: BufRead> BitReader<R> {
     fn fill_inner_buffer(&mut self) {
         let buf = self.data.fill_buf().expect("Failed to fill buffer");
 
+        if std::hint::likely(buf.len() >= 8 && self.num_of_stored_bits <= 64) {
+            let val = u64::from_le_bytes(buf[..8].try_into().expect("8 bytes fit into a u64"));
+
+            self.bit_store |= (val as u128) << self.num_of_stored_bits;
+            self.num_of_stored_bits += 64;
+            self.data.consume(8);
+
+            return;
+        }
+
         let space_for_bits: usize = (128u8 - self.num_of_stored_bits).into();
 
         let bytes_to_process = buf.len().min(space_for_bits / 8);

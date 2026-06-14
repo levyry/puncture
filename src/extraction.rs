@@ -1,6 +1,6 @@
 use std::{
     ffi::CString,
-    hint::{likely, unlikely},
+    hint::likely,
     io::{self, BufRead, Error, Write},
 };
 
@@ -301,10 +301,8 @@ impl<'a, R: BufRead> Extractor<'a, R> {
                 let distance = (distance_base + distance_offset).into();
 
                 output.repeat_from(distance, length);
-            } else if unlikely(literal == 256) {
-                break;
             } else {
-                unreachable!();
+                break;
             }
         }
 
