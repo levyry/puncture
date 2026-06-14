@@ -1,7 +1,7 @@
 use std::{
     ffi::CString,
     hint::{likely, unlikely},
-    io::{self, BufRead, Write},
+    io::{self, BufRead, Error, Write},
 };
 
 use crate::{bitreader::BitReader, cached_writer::CachedWriter};
@@ -142,18 +142,28 @@ impl<'a, R: BufRead> Extractor<'a, R> {
 
         if fname {
             let mut name = Vec::new();
-            self.data.read_until(0x00, &mut name)?;
+            loop {
+                let mut byte = [0u8; 1];
+                self.data.read_raw_bytes(&mut byte);
+                name.push(byte[0]);
+                if byte[0] == 0 {
+                    break;
+                }
+            }
             self.file_name = Some(
-                CString::from_vec_with_nul(name)
-                    .map_err(|_| std::io::Error::other("Corrupted filename"))?,
+                CString::from_vec_with_nul(name).map_err(|_| Error::other("Corrupted filename"))?,
             );
         }
 
         if fcomment {
-            // The comment can be ignored, as it is for human-consumption.
-            self.data.skip_until(0x00)?;
+            loop {
+                let mut byte = [0u8; 1];
+                self.data.read_raw_bytes(&mut byte);
+                if byte[0] == 0 {
+                    break;
+                }
+            }
         }
-
         // TODO: Currently, the crc16 field is ignored if it exists.
         // I could calculate this, but then I would need to keep a
         // seperate buffer for all the header fields I read in.

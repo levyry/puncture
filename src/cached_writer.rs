@@ -100,18 +100,15 @@ impl<W: Write> CachedWriter<W> {
 
 impl<W: Write> Write for CachedWriter<W> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        let length = buf.len();
+        let write_len = buf.len().min(TOTAL_SIZE - self.write_index);
 
-        if TOTAL_SIZE - self.write_index < length {
-            self.shift_to_history()?;
-        }
+        self.buf[self.write_index..self.write_index + write_len].copy_from_slice(&buf[..write_len]);
 
-        self.buf[self.write_index..self.write_index + length].copy_from_slice(buf);
+        self.write_index += write_len;
 
-        self.write_index += length;
         self.check_flush()?;
 
-        Ok(length)
+        Ok(write_len)
     }
 
     fn flush(&mut self) -> io::Result<()> {

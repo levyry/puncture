@@ -1,7 +1,4 @@
-use std::{
-    fmt::Debug,
-    io::{self, BufRead},
-};
+use std::{fmt::Debug, io::BufRead};
 
 /// A reader that can extract bits LSB first.
 #[derive(Debug)]
@@ -20,28 +17,6 @@ impl<R: BufRead> BitReader<R> {
         }
     }
 
-    /// Reads all bytes into buf until the delimiter byte or EOF is reached.
-    ///
-    /// This function is a wrapper around the underlying streams `read_until`.
-    ///
-    /// # Errors
-    ///
-    /// If the underlying stream errors.
-    pub fn read_until(&mut self, byte: u8, buf: &mut Vec<u8>) -> io::Result<usize> {
-        self.data.read_until(byte, buf)
-    }
-
-    /// Skips all bytes until the delimiter byte or EOF is reached.
-    ///
-    /// This function is a wrapper around the underlying streams `skip_until`.
-    ///
-    /// # Errors
-    ///
-    /// If the underlying stream errors.
-    pub fn skip_until(&mut self, byte: u8) -> io::Result<usize> {
-        self.data.skip_until(byte)
-    }
-
     /// Peek at most 64 bits at a time without advancing the underlying stream.
     ///
     /// Note that the underlying stream might need to be advanced if there
@@ -53,7 +28,7 @@ impl<R: BufRead> BitReader<R> {
     #[inline(always)]
     pub fn peek_bits(&mut self, num_of_bits: u8) -> u128 {
         // We must advance the stream to be able to peek
-        if self.num_of_stored_bits < num_of_bits {
+        while self.num_of_stored_bits < num_of_bits {
             self.fill_inner_buffer();
         }
 
