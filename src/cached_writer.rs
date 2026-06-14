@@ -27,18 +27,18 @@ impl<W: Write> CachedWriter<W> {
     }
 
     #[inline(always)]
-    pub fn write_literal(&mut self, literal: u8) -> io::Result<()> {
+    pub fn write_literal(&mut self, literal: u8) {
         self.buf[self.write_index] = literal;
         self.write_index += 1;
-        self.check_flush()
     }
 
     /// Repeat a specific subslice of the output stream.
     #[inline(always)]
-    pub fn repeat_from(&mut self, distance: usize, length: usize) -> io::Result<()> {
+    pub fn repeat_from(&mut self, distance: usize, length: usize) {
         let start = self.write_index - distance;
         let end = start + length;
 
+        // We might copy garbage here, but overwrite it in the while loop later
         self.buf.copy_within(start..end, self.write_index);
         self.write_index += length.min(distance);
 
@@ -55,8 +55,6 @@ impl<W: Write> CachedWriter<W> {
                 amount_wrote += chunk_size;
             }
         }
-
-        self.check_flush()
     }
 
     #[inline(always)]
@@ -77,7 +75,7 @@ impl<W: Write> CachedWriter<W> {
     }
 
     #[inline(always)]
-    fn check_flush(&mut self) -> io::Result<()> {
+    pub fn check_flush(&mut self) -> io::Result<()> {
         if self.write_index > TOTAL_SIZE - MAX_LENGTH {
             self.shift_to_history()?;
         }
@@ -178,7 +176,7 @@ mod tests {
 
         writer.write_all(b"A")?;
 
-        writer.repeat_from(1, 10)?;
+        writer.repeat_from(1, 10);
 
         assert_eq!(
             &writer.buf[HISTORY_SIZE..writer.write_index],
@@ -195,7 +193,7 @@ mod tests {
 
         writer.write_all(b"abc")?;
 
-        writer.repeat_from(3, 9)?;
+        writer.repeat_from(3, 9);
 
         assert_eq!(
             &writer.buf[HISTORY_SIZE..writer.write_index],
@@ -212,13 +210,13 @@ mod tests {
 
         writer.write_all(b"123")?;
 
-        writer.repeat_from(2, 4)?;
+        writer.repeat_from(2, 4);
         assert_eq!(&writer.buf[HISTORY_SIZE..writer.write_index], b"1232323");
 
         writer.write_all(b"45")?;
         assert_eq!(&writer.buf[HISTORY_SIZE..writer.write_index], b"123232345");
 
-        writer.repeat_from(6, 3)?;
+        writer.repeat_from(6, 3);
         assert_eq!(
             &writer.buf[HISTORY_SIZE..writer.write_index],
             b"123232345232"

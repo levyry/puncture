@@ -1,6 +1,6 @@
 use std::{
     fs::File,
-    io::{self, BufRead, BufReader, BufWriter, IsTerminal, Write},
+    io::{self, BufRead, BufReader, IsTerminal, Write},
     path::Path,
 };
 
@@ -18,26 +18,39 @@ fn main() -> Result<(), io::Error> {
     let input = args.get_one::<String>("INPUT");
     let output = args.get_one::<String>("OUTPUT");
 
-    let input_stream: Box<dyn BufRead> = if let Some(input_path) = input
+    if is_extract
+        && let Some(input_path) = input
         && input_path != "-"
     {
-        Box::new(BufReader::new(File::open(input_path)?))
+        let input_stream = Box::new(BufReader::with_capacity(
+            1024 * 1024,
+            File::open(input_path)?,
+        ));
+
+        run_extraction(to_stdout, input, output, input_stream)?;
     } else {
-        Box::new(BufReader::new(std::io::stdin()))
-    };
+        let input_stream = Box::new(BufReader::with_capacity(1024 * 1024, std::io::stdin()));
 
-    if is_extract {
-        let mut br = BitReader::new(input_stream);
-        let mut ext = Extractor::new(&mut br);
-
-        ext.process_header()?;
-
-        let mut output_stream = get_output_stream(to_stdout, input, output, &ext)?;
-
-        ext.deflate(&mut output_stream)?;
+        run_extraction(to_stdout, input, output, input_stream)?;
     }
 
     Ok(())
+}
+
+fn run_extraction<R: BufRead>(
+    to_stdout: bool,
+    input: Option<&String>,
+    output: Option<&String>,
+    input_stream: Box<R>,
+) -> io::Result<()> {
+    let mut br = BitReader::new(input_stream);
+    let mut ext = Extractor::new(&mut br);
+
+    ext.process_header()?;
+
+    let mut output_stream = get_output_stream(to_stdout, input, output, &ext)?;
+
+    ext.deflate(&mut output_stream)
 }
 
 fn get_output_stream(
@@ -47,27 +60,27 @@ fn get_output_stream(
     extractor: &Extractor<'_, impl BufRead>,
 ) -> io::Result<Box<dyn Write>> {
     Ok(if print_to_stdout {
-        Box::new(BufWriter::new(std::io::stdout()))
+        Box::new(std::io::stdout())
     } else if let Some(requested_file_name) = cli_output {
-        Box::new(BufWriter::new(File::create(requested_file_name)?))
+        Box::new(File::create(requested_file_name)?)
     } else if let Some(original_file_name) = extractor.get_file_name() {
         let name = original_file_name
             .clone()
             .into_string()
             .map_err(|_| io::Error::other("Original file name isn't valid UTF8"))?;
-        Box::new(BufWriter::new(File::create_new(name)?))
+        Box::new(File::create_new(name)?)
     } else if let Some(input_path) = cli_input
         && input_path != "-"
     {
-        Box::new(BufWriter::new(File::create_new(
+        Box::new(File::create_new(
             Path::new(&input_path)
                 .file_stem()
                 .map(Path::new)
                 .expect("Somehow there was no file name"),
-        )?))
+        )?)
     } else {
         // If the stdout flag wasn't given, there was no explicit output and no explicit input, we'll use a placeholder
-        Box::new(BufWriter::new(File::create_new("decompressed.txt")?))
+        Box::new(File::create_new("decompressed.txt")?)
     })
 }
 

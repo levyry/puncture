@@ -262,6 +262,8 @@ impl<'a, R: BufRead> Extractor<'a, R> {
         output: &mut CachedWriter<W>,
     ) -> io::Result<()> {
         loop {
+            output.check_flush()?;
+
             let literal_bits: u16 = self.data.peek_bits(literal_max_length) as u16;
 
             let symbol_mask = (1u16 << literal_max_length) - 1;
@@ -271,7 +273,7 @@ impl<'a, R: BufRead> Extractor<'a, R> {
             self.data.advance_bits_unchecked(literal_len);
 
             if likely(literal < 256) {
-                output.write_literal(literal as u8)?;
+                output.write_literal(literal as u8);
             } else if likely(literal > 256) {
                 let length_index: usize = (literal - 257).into();
 
@@ -298,7 +300,7 @@ impl<'a, R: BufRead> Extractor<'a, R> {
 
                 let distance = (distance_base + distance_offset).into();
 
-                output.repeat_from(distance, length)?;
+                output.repeat_from(distance, length);
             } else if unlikely(literal == 256) {
                 break;
             } else {
