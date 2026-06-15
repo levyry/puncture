@@ -1,3 +1,14 @@
+//! The entry point and the CLI
+//!
+//! This module is responsible for
+//! * parsing the CLI arguments
+//! * initializing the output stream
+//! * actually calling the DEFLATE algorithm
+//!
+//! ## CLI
+//!
+//! The CLI structure of puncture closely mimics the standard `gzip`/`pigz` CLI,
+//! see [`get_cli_args`] for more information.
 use std::{
     fs::File,
     io::{self, BufRead, BufReader, IsTerminal, Write},
@@ -49,42 +60,18 @@ fn main() -> Result<(), io::Error> {
     Ok(())
 }
 
-fn run_extraction<R: BufRead>(to_stdout: bool, file: &str, input_stream: R) -> io::Result<()> {
-    let mut br = BitReader::new(input_stream);
-    let mut ext = Extractor::new(&mut br);
-
-    ext.process_header()?;
-
-    let mut output_stream = get_output_stream(to_stdout, file, &ext)?;
-
-    ext.deflate(&mut output_stream)
-}
-
-fn get_output_stream(
-    print_to_stdout: bool,
-    file: &str,
-    extractor: &Extractor<'_, impl BufRead>,
-) -> io::Result<Box<dyn Write>> {
-    Ok(if print_to_stdout || file == "-" {
-        Box::new(std::io::stdout())
-    } else if let Some(original_file_name) = extractor.get_file_name() {
-        let name = original_file_name
-            .clone()
-            .into_string()
-            .map_err(|_| io::Error::other("Original file name isn't valid UTF8"))?;
-
-        Box::new(File::create_new(name)?)
-    } else {
-        let path = Path::new(file);
-        let stem = path
-            .file_stem()
-            .map(Path::new)
-            .expect("Invalid file name provided");
-
-        Box::new(File::create_new(stem)?)
-    })
-}
-
+/// Returns the parsed CLI arguments
+///
+/// The arguments are:
+///
+/// * `-d` for decompression
+/// * `-c` for routing to stdout
+/// * `-k` for keeping the original file after decompression
+/// * `-h` for printing the help message
+/// * `-V` for printing the version
+///
+/// It can process multiple files at a time, and prints help if no arguments are
+/// provided.
 fn get_cli_args() -> io::Result<ArgMatches> {
     let mut cmd = Command::new("puncture")
         .version("0.1.0")
@@ -123,4 +110,40 @@ fn get_cli_args() -> io::Result<ArgMatches> {
     }
 
     Ok(cmd.get_matches())
+}
+
+fn get_output_stream(
+    print_to_stdout: bool,
+    file: &str,
+    extractor: &Extractor<'_, impl BufRead>,
+) -> io::Result<Box<dyn Write>> {
+    Ok(if print_to_stdout || file == "-" {
+        Box::new(std::io::stdout())
+    } else if let Some(original_file_name) = extractor.get_file_name() {
+        let name = original_file_name
+            .clone()
+            .into_string()
+            .map_err(|_| io::Error::other("Original file name isn't valid UTF8"))?;
+
+        Box::new(File::create_new(name)?)
+    } else {
+        let path = Path::new(file);
+        let stem = path
+            .file_stem()
+            .map(Path::new)
+            .expect("Invalid file name provided");
+
+        Box::new(File::create_new(stem)?)
+    })
+}
+
+fn run_extraction<R: BufRead>(to_stdout: bool, file: &str, input_stream: R) -> io::Result<()> {
+    let mut br = BitReader::new(input_stream);
+    let mut ext = Extractor::new(&mut br);
+
+    ext.process_header();
+
+    let mut output_stream = get_output_stream(to_stdout, file, &ext)?;
+
+    ext.deflate(&mut output_stream)
 }

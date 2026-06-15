@@ -16,6 +16,7 @@ keywords = [
 categories = ["tools", "compression", "decompression"]
 version = "0.1.0"
 edition = "2024"
+exclude = ["tests/data/*", "tests/encode.py"]
 
 [dependencies]
 clap = { version = "4", default-features = false, features = [

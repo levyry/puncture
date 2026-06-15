@@ -17,7 +17,7 @@ fn test_dynamic_huffman_random() {
     let mut br = BitReader::new(cursor);
     let mut ext = Extractor::new(&mut br);
 
-    ext.process_header().expect("Failed to process gzip header");
+    ext.process_header();
 
     // Act
     let mut output_buffer = Vec::new();
@@ -45,7 +45,7 @@ fn test_dynamic_huffman_shakespeare() {
     let mut br = BitReader::new(cursor);
     let mut ext = Extractor::new(&mut br);
 
-    ext.process_header().expect("Failed to process gzip header");
+    ext.process_header();
 
     // Act
     let mut output_buffer = Vec::new();
@@ -73,7 +73,7 @@ fn test_fixed_huffman_random() {
     let mut br = BitReader::new(cursor);
     let mut ext = Extractor::new(&mut br);
 
-    ext.process_header().expect("Failed to process gzip header");
+    ext.process_header();
 
     // Act
     let mut output_buffer = Vec::new();
@@ -101,7 +101,7 @@ fn test_fixed_huffman_shakespeare() {
     let mut br = BitReader::new(cursor);
     let mut ext = Extractor::new(&mut br);
 
-    ext.process_header().expect("Failed to process gzip header");
+    ext.process_header();
 
     // Act
     let mut output_buffer = Vec::new();
@@ -129,7 +129,7 @@ fn test_no_compr_random() {
     let mut br = BitReader::new(cursor);
     let mut ext = Extractor::new(&mut br);
 
-    ext.process_header().expect("Failed to process gzip header");
+    ext.process_header();
 
     // Act
     let mut output_buffer = Vec::new();
@@ -157,7 +157,7 @@ fn test_no_compr_shakespeare() {
     let mut br = BitReader::new(cursor);
     let mut ext = Extractor::new(&mut br);
 
-    ext.process_header().expect("Failed to process gzip header");
+    ext.process_header();
 
     // Act
     let mut output_buffer = Vec::new();

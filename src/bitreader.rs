@@ -1,14 +1,26 @@
+//! This module houses the [`BitReader`], which is responsible for the bit-level
+//! manipulation of the (compressed) input stream.
+//!
+//! It uses a 128 bit large internal buffer to store bits to allow peeking,
+//! similar to peeking iterators.
+//!
+//! Since DEFLATE uses LSB-first bit ordering, but MSB-first byte ordering,
+//! this implementation also reads bits in a similar manner.
 use std::{fmt::Debug, io::BufRead};
 
-/// A reader that can extract bits LSB first.
+/// A reader that can extract bits LSB first from a stream.
 #[derive(Debug)]
 pub struct BitReader<R> {
-    data: R,
-    bit_store: u128,
-    num_of_stored_bits: u8,
+    /// The wrapped input stream
+    pub data: R,
+    /// The internal bit buffer
+    pub bit_store: u128,
+    /// The amount of bits actually stored in the buffer
+    pub num_of_stored_bits: u8,
 }
 
 impl<R: BufRead> BitReader<R> {
+    /// Create a new [`BitReader`] by wrapping another stream.
     pub const fn new(data: R) -> Self {
         Self {
             data,
@@ -58,6 +70,10 @@ impl<R: BufRead> BitReader<R> {
         result
     }
 
+    /// Fills the inner bit buffer
+    ///
+    /// This tries to fill as many bits as possible at a time, but there is a
+    /// fast path that fills 64 bits if able.
     #[inline]
     fn fill_inner_buffer(&mut self) {
         let buf = self.data.fill_buf().expect("Failed to fill buffer");

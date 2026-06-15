@@ -1,7 +1,93 @@
+//! This module houses the DEFLATE implementation.
+//!
+//! ## Constants
+//!
+//! RFC 1951 (henceforth: "the RFC") defines a lot of constants, tables, and
+//! magic numbers. These are all defined at the beginning of the module.
+//!
+//! ## GZIP headers
+//!
+//! RFC 1952 defines the GZIP header format. I chose to ignore a lot of fields,
+//! the only optional field I parse is the original file name.
+//!
+//! ## DEFLATE
+//!
+//! The DEFLATE algorithm is a bit-based compression/decompression algorithm.
+//! It uses two main ideas for compression: Huffman coding, and the LZ77
+//! algorithm.
+//!
+//! ### Huffman coding
+//!
+//! Huffman coding helps with assigning shorter bit-sequences to more
+//! frequently occuring symbols. For example, in English, the letter 'e' is the
+//! most frequently used letter on average, so it should be coded with a
+//! shorter bit-sequence than, say, 'q' or 'v'.
+//!
+//! Huffman coding is a form of prefix coding, which is pretty similar to how
+//! phone numbers work. For more insight, I recommend
+//! [An Explanation of the Deflate Algorithm](https://zlib.net/feldspar.html)
+//! by Antaeus Feldspar. The gist of it is that the symbols are arrenged in a
+//! binary tree, where only the leaf nodes contain the symbols. To get the code
+//! for any symbol, you travel from the root of the tree, and every time you go
+//! left, you add a `0` to the code, and every time you go right, you add a `1`.
+//!
+//! Given a list of symbols (like words, sentences, whatever we want to assign
+//! our codes to) and their frequencies, we can build a Huffman tree from which
+//! each symbols Huffman code can be deduced. Then, we simply replace the
+//! symbols in our original text with their respective codes, and we now have a
+//! shorter message.
+//!
+//! To decode it, you can simply start reading the bit-stream, and eagerly match
+//! on any Huffman codes you find. Since only the leaf nodes of the tree
+//! contain symbols, you will never be in an ambigous situtation.
+//!
+//! There are additional caveats to the specific form of Huffman coding used by
+//! the RFC, but it's mostly just minor details.
+//!
+//! ### LZ77 algorithm
+//!
+//! This algoritm takes a different approach: it only focuses on eliminating as
+//! many repetitions as it can. When scanning the text, it keeps a history of
+//! the previously parsed text, and every repetition, it replaces with a sort of
+//! pointer, indicating how far back to look in the history, and how many
+//! symbols to repeat.
+//!
+//! For example, lets say we wanted to decompress the following input:
+//!
+//! ```text
+//! criss [D=6,L=2]o[D=6,L=2] apple sauce
+//! ```
+//!
+//! When we see a `[D,L]` pair, it indicates the Distance we must go backward
+//! in the stream and the Length of the data we must copy. The above example
+//! decodes to:
+//!
+//! ```text
+//! criss cross apple sauce
+//! ```
+//!
+//! The `cr` and `ss` parts are repeated between `criss` and `cross`. Of
+//! course, this compression only makes sense if we copy a large amount of data,
+//! not just two characters.
+//!
+//! ### DEFLATE, in detail
+//!
+//! DEFLATE works by combining these two algorithms: first it eliminates
+//! duplicates with LZ77, then uses Huffman coding to shrink the input down even
+//! further. There are three kinds of compression it can choose from:
+//!
+//! * No compression at all (mainly used for wrapping already compressed data in a GZIP header format)
+//! * Fixed Huffman: First compress with LZ77, and then use a predetermined Huffman coding. The RFC defines this tree, see [`FIXED_LITERALS_LUT`] and [`FIXED_DISTANCES_LUT`] to see the construction of these trees as LUTs.
+//! * Dynamic Huffman: First compress with LZ77, then the compressor can analyze the data, and create a specific Huffman tree for it on the fly. Since this tree is tailor-made for the specific data, the tree itself needs to be transmitted alongside the data.
+//!
+//! Most GZIP files use the dynamic huffman encoding. The trickiest part of the
+//! whole algorithm is being able to decode the dynamic huffman trees on the
+//! fly. For more information, read the RFC.
+
 use std::{
     ffi::CString,
     hint::likely,
-    io::{self, BufRead, Error, Write},
+    io::{self, BufRead, Write},
 };
 
 use crate::{bitreader::BitReader, cached_writer::CachedWriter};
@@ -29,10 +115,13 @@ const DISTANCE_OFFSET_BITS_TABLE: [u8; 30] = [
     13,
 ];
 
-/// A memory-packed Huffman symbol decoding lookup table.
+/// A memory-packed Huffman symbol decoding lookup table
 ///
+/// On the first 9 bits, the actual decoded symbol is stored. On the following
+/// 4 bits, the length of the decoded symbol is stored.
 ///
-const FIXED_LITERALS_LUT: [u16; 512] = {
+/// The RFC defines this table in Section 3.2.6.
+pub const FIXED_LITERALS_LUT: [u16; 512] = {
     let mut table = [0u16; 512];
 
     let mut raw_bits: usize = 0;
@@ -64,7 +153,15 @@ const FIXED_LITERALS_LUT: [u16; 512] = {
     table
 };
 
-const FIXED_DISTANCES_LUT: [u16; 32] = {
+/// A memory-packed Huffman distance decoding lookup table
+///
+/// On the first 9 bits, the actual decoded distance is stored. On the following
+/// 3 bits, the length of the decoded symbol is stored. For the fixed Huffman
+/// tree, the length of the distance is always 5 bits. I decided to redundantly
+/// store it so it is compatible with the dynamic Huffman LUTs.
+///
+/// The RFC defines this table in Section 3.2.6.
+pub const FIXED_DISTANCES_LUT: [u16; 32] = {
     let mut table = [0u16; 32];
 
     let mut raw_bits: usize = 0;
@@ -82,13 +179,17 @@ const FIXED_DISTANCES_LUT: [u16; 32] = {
     table
 };
 
+/// The main struct driving the extraction process
 #[derive(Debug)]
 pub struct Extractor<'a, R> {
-    data: &'a mut BitReader<R>,
-    file_name: Option<CString>,
+    /// The input data, wrapped in a [`BitReader`].
+    pub data: &'a mut BitReader<R>,
+    /// The original file name in the GZIP header, if it is present.
+    pub file_name: Option<CString>,
 }
 
 impl<'a, R: BufRead> Extractor<'a, R> {
+    /// Creates a new [`Extractor`] by wrapping a [`BitReader`].
     pub const fn new(data: &'a mut BitReader<R>) -> Self {
         Self {
             data,
@@ -96,19 +197,28 @@ impl<'a, R: BufRead> Extractor<'a, R> {
         }
     }
 
+    /// Provides a reference to the parsed file name if it exists.
     #[must_use]
     pub const fn get_file_name(&self) -> Option<&CString> {
         self.file_name.as_ref()
     }
 
-    /// Process the GZIP header
+    /// Processes the GZIP header.
     ///
-    /// # Errors
+    /// It only uses a pretty minimal set of flags from the header, but is fully
+    /// RFC compliant. It reads the original file name if provided.
     ///
-    /// If the header isn't per the RFC 1952 specification, or EOF is reached
-    /// while parsing the header.
-    pub fn process_header(&mut self) -> io::Result<()> {
+    /// # Panics
+    ///
+    /// If the GZIP header isn't RFC compliant, namely:
+    ///
+    /// * If the magic bytes aren't correct
+    /// * If the compression method isn't `0x08`
+    /// * If the reserved flag bits aren't zeroed out
+    pub fn process_header(&mut self) {
         let mut magic = [0; 2];
+
+        // The magic bytes are not LSB first
         self.data.read_raw_bytes(&mut magic);
 
         if magic != GZIP_MAGIC {
@@ -131,7 +241,7 @@ impl<'a, R: BufRead> Extractor<'a, R> {
             unreachable!("Flag reserved bits aren't zeroed out: {flags}");
         }
 
-        // TODO: We skip MTIME, XFL and OS headers.
+        // We skip MTIME, XFL and OS headers.
         let _mtime: u32 = self.data.read_bytes(4) as u32;
         let _xfl_and_os: u16 = self.data.read_bytes(2) as u16;
 
@@ -151,7 +261,7 @@ impl<'a, R: BufRead> Extractor<'a, R> {
                 }
             }
             self.file_name = Some(
-                CString::from_vec_with_nul(name).map_err(|_| Error::other("Corrupted filename"))?,
+                CString::from_vec_with_nul(name).expect("A null byte is always the last element."),
             );
         }
 
@@ -168,16 +278,23 @@ impl<'a, R: BufRead> Extractor<'a, R> {
         // I could calculate this, but then I would need to keep a
         // seperate buffer for all the header fields I read in.
         let mut _crc16: Option<u16> = fhcrc.then(|| self.data.read_bytes(2) as u16);
-
-        Ok(())
     }
 
     /// Runs the DEFLATE algorithm and writes the result to output.
     ///
+    /// It closely follows the algorithm outlined in Section 3.2.3. of the RFC.
+    ///
     /// # Errors
     ///
-    /// If EOF is reached at an unexpected moment, or if the CRC-32
-    /// hash or ISIZE counter aren't correct.
+    /// If EOF is reached at an unexpected moment.
+    ///
+    /// # Panics
+    ///
+    /// If the DEFLATE block isn't RFC compliant, namely:
+    ///
+    /// * If the btype header is `0b11`
+    ///
+    /// or if the CRC-32 checksum isn't correct.
     pub fn deflate(mut self, output: &mut impl Write) -> io::Result<()> {
         // To track the LZ77 sliding window and CRC-32 hash, we wrap the stream
         let mut output = CachedWriter::new(output);
@@ -212,6 +329,7 @@ impl<'a, R: BufRead> Extractor<'a, R> {
             }
         }
 
+        // We might not be at a byte boundary after finishing the block
         self.data.align_to_byte();
 
         let expected_crc32: u32 = self.data.read_bytes(4) as u32;
@@ -234,7 +352,18 @@ impl<'a, R: BufRead> Extractor<'a, R> {
         Ok(())
     }
 
-    fn uncompressed_data<W: Write>(&mut self, output: &mut CachedWriter<W>) -> io::Result<()> {
+    /// Decompresses an uncompressed DEFLATE block
+    ///
+    /// # Errors
+    ///
+    /// If an EOF is reached unexpectedly.
+    ///
+    /// # Panics
+    ///
+    /// If the DEFLATE block isn't RFC compliant, namely:
+    ///
+    /// * If `len` and `nlen` aren't one's complements of each other.
+    pub fn uncompressed_data<W: Write>(&mut self, output: &mut CachedWriter<W>) -> io::Result<()> {
         self.data.align_to_byte();
         let len: u16 = self.data.read_bytes(2) as u16;
         let nlen: u16 = self.data.read_bytes(2) as u16;
@@ -252,8 +381,18 @@ impl<'a, R: BufRead> Extractor<'a, R> {
         Ok(())
     }
 
+    /// Decodes a Huffman encoded DEFLATE block
+    ///
+    /// This function is used for both fixed and dynamic Huffman decompression.
+    ///
+    /// For further information, read the inline comments and Section 3.2.3.
+    /// of the RFC.
+    ///
+    /// # Errors
+    ///
+    /// If EOF is reached unexpectedly.
     #[inline(always)]
-    fn decode_huffman<W: Write>(
+    pub fn decode_huffman<W: Write>(
         &mut self,
         literal_max_length: u8,
         distance_max_length: u8,
@@ -262,19 +401,24 @@ impl<'a, R: BufRead> Extractor<'a, R> {
         output: &mut CachedWriter<W>,
     ) -> io::Result<()> {
         loop {
+            // Check if we have enough space in the buffer for another literal.
             output.check_flush()?;
 
+            // First, decode the literal, to see whether this is a Distance/
+            // Length pair, or just a regular Huffman code
             let literal_bits: u16 = self.data.peek_bits(literal_max_length) as u16;
-
             let symbol_mask = (1u16 << literal_max_length) - 1;
             let packed_symbol = literals[usize::from(literal_bits & symbol_mask)];
             let literal = packed_symbol & 0x1FF;
             let literal_len = (packed_symbol >> 9) as u8;
             self.data.advance_bits_unchecked(literal_len);
 
+            // As per Section 3.2.3.
             if likely(literal < 256) {
                 output.write_literal(literal as u8);
             } else if likely(literal > 256) {
+                // We have a length/distance pair. The length is already encoded
+                // in the literal
                 let length_index: usize = (literal - 257).into();
 
                 let length_base = LENGTH_BASE_TABLE[length_index];
@@ -284,6 +428,7 @@ impl<'a, R: BufRead> Extractor<'a, R> {
 
                 let length: usize = (length_base + length_offset).into();
 
+                // The distance is right after the length in the stream
                 let distance_bits: u16 = self.data.peek_bits(distance_max_length) as u16;
 
                 let distance_mask = (1u16 << distance_max_length) - 1;
@@ -300,8 +445,11 @@ impl<'a, R: BufRead> Extractor<'a, R> {
 
                 let distance = (distance_base + distance_offset).into();
 
+                // Check the LZ77 sliding window, and repeat `length`
+                // bits from `distance`.
                 output.repeat_from(distance, length);
             } else {
+                // 256 denotes the end of this block
                 break;
             }
         }
@@ -309,7 +457,14 @@ impl<'a, R: BufRead> Extractor<'a, R> {
         Ok(())
     }
 
-    fn decode_dynamic_tables(&mut self) -> ([u16; 32768], [u16; 32768]) {
+    /// Decode the dynamic Huffman tables
+    ///
+    /// The main algorithm and format is described in Section 3.2.2. and 3.2.7.
+    /// respectively.
+    ///
+    /// It first decodes the "code length table", and using that it builds
+    /// the actual length and distance tables.
+    pub fn decode_dynamic_tables(&mut self) -> ([u16; 32768], [u16; 32768]) {
         let hlit = self.data.read_bits(5) as u16 + 257;
         let hdist = self.data.read_bits(5) as u16 + 1;
         let hclen = self.data.read_bits(4) as u8 + 4;
@@ -335,6 +490,7 @@ impl<'a, R: BufRead> Extractor<'a, R> {
 
         let mut lit_dist_table = [0u16; 286 + 32];
 
+        // Now we need to read the next `hlit + hdist` symbols and decode them
         let mut index = 0;
         let symbol_count = (hlit + hdist).into();
         while index != symbol_count {
@@ -346,6 +502,7 @@ impl<'a, R: BufRead> Extractor<'a, R> {
             let symbol_len = (packed_value >> 9) as u8;
             self.data.advance_bits_unchecked(symbol_len);
 
+            // As per the code length alphabet described in Section 3.2.7.
             match symbol {
                 0..=15 => {
                     lit_dist_table[index] = symbol;
@@ -384,8 +541,10 @@ impl<'a, R: BufRead> Extractor<'a, R> {
             }
         }
 
+        // We have the codelengths for the literals/lengths, and the distances
         let (lit_lengths, dist_lengths) = lit_dist_table.split_at(hlit.into());
 
+        // Using these, we can build the tables.
         let mut lit_codes = vec![0u16; hlit.into()];
         build_huff_codes(lit_lengths, &mut lit_codes);
         let lit_table = build_lut::<32768>(lit_lengths, &lit_codes);
@@ -398,7 +557,13 @@ impl<'a, R: BufRead> Extractor<'a, R> {
     }
 }
 
-fn build_huff_codes(lengths: &[u16], codes: &mut [u16]) {
+/// Creates the Huffman codes from just the list of codelengths
+///
+/// The Huffman codes list is indexed by the symbol, and it returns the
+/// associated code.
+///
+/// This implementation follows the steps listed in Section 3.2.2. of the RFC.
+pub fn build_huff_codes(lengths: &[u16], codes: &mut [u16]) {
     let bl_count: [u16; MAX_CODE_LENGTH + 1] = {
         let mut counts = [0u16; MAX_CODE_LENGTH + 1];
 
@@ -431,7 +596,24 @@ fn build_huff_codes(lengths: &[u16], codes: &mut [u16]) {
     }
 }
 
-fn build_lut<const LUT: usize>(lengths: &[u16], codes: &[u16]) -> [u16; LUT] {
+/// Create a memory-packed LUT for decoding Huffman codes to symbols
+///
+/// It takes a list of codelengths and the codes themselves. For each Huffman
+/// code with length > 0, we create an entry in the table. The first 9 bits
+/// contain the symbol (with potentially some extra bits), the rest contain the
+/// length of the symbol.
+///
+/// ## Optimizations
+///
+/// These tables can be very large (as with the dynamic huffman tables), and
+/// they don't fit in most L1 caches. A nice optimization would be a two-tier
+/// LUT, which would use a smaller primary table for the more frequent symbols,
+/// and a secondary table for the more rare ones. This way, the whole primary
+/// LUT could stay in L1 cache. This would provide a pretty significant boost
+/// in execution speed, but I chose not to implement it, since it borders on
+/// the complexity I wanted to avoid.
+#[must_use]
+pub fn build_lut<const LUT: usize>(lengths: &[u16], codes: &[u16]) -> [u16; LUT] {
     let mut table = [0u16; LUT];
 
     for (symbol, &length) in lengths.iter().enumerate() {

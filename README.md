@@ -36,7 +36,7 @@ puncture -cdk /path/to/compressed_file.gz > path/to/uncompressed_file
 
 i wanted to create a project that tries to strike the middle ground between two extremes: it tries to be simple (but not the simplest) and fast (but not the fastest).
 
-there are certanily simpler and shorter gzip implementations, but these projects are usually so stripped down, that they sacrifice educational value for simplicity. there isn't a lot to be learned from a 280 line program for someone who is already familiar with the topic.
+there are certainly simpler and shorter gzip implementations, but these projects are usually so stripped down, that they sacrifice educational value for simplicity. there isn't a lot to be learned from a 280 line program for someone who is already familiar with the topic.
 
 there are also certainly faster, and more complicated implementations. these are usually so heavily optimized, that code readability suffers as a result. there _are_ things to be learnt from these projects as well, but their purpose is very different.
 
@@ -56,7 +56,7 @@ i tried to use as few dependencies as possible:
 
 ## resources
 
-i mainly used [RFC1952](https://datatracker.ietf.org/doc/html/rfc1952) for the GZIP header parsing, and [RFC1951](https://datatracker.ietf.org/doc/html/rfc1951) for the actual DEFLATE algorithm. other notable resource that helped me include:
+i mainly used [RFC1952](https://datatracker.ietf.org/doc/html/rfc1952) for the GZIP header parsing, and [RFC1951](https://datatracker.ietf.org/doc/html/rfc1951) for the actual DEFLATE algorithm. other notable resources that helped me include:
 
 * [`infgen`](https://github.com/madler/infgen) for viewing deflate streams with semantic information
 * [An Explanation of the Deflate Algorithm](https://zlib.net/feldspar.html) by Anteus Feldspar
