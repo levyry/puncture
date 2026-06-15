@@ -2,7 +2,7 @@
 name = "puncture"
 authors = ["Orbán Levente"]
 description = "A small gzip utility program, intentionally kept simple"
-license = "Apache-2 OR MIT"
+license = "Apache-2.0 OR MIT"
 repository = "https://www.github.com/levyry/puncture"
 keywords = [
     "compression",
@@ -16,7 +16,8 @@ keywords = [
 categories = ["tools", "compression", "decompression"]
 version = "0.1.0"
 edition = "2024"
-exclude = ["tests/data/*", "tests/encode.py"]
+exclude = ["tests/*", "perf_bin/*", "*.code-workspace", ".git*"]
+rust-version = "1.95.0"
 
 [dependencies]
 clap = { version = "4", default-features = false, features = [
