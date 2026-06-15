@@ -51,7 +51,7 @@ impl<W: Write> CachedWriter<W> {
     /// Write a literal byte to the stream.
     #[inline(always)]
     pub fn write_literal(&mut self, literal: u8) {
-        self.buf[self.write_index] = literal;
+        self.buf[self.write_index & 0xFFFF] = literal;
         self.write_index += 1;
     }
 
@@ -64,6 +64,9 @@ impl<W: Write> CachedWriter<W> {
     /// bits.
     #[inline(always)]
     pub fn repeat_from(&mut self, distance: usize, length: usize) {
+        assert!(self.write_index + length <= TOTAL_SIZE);
+        assert!(self.write_index >= distance);
+
         let start = self.write_index - distance;
 
         if distance >= length {

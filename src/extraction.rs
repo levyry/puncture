@@ -85,9 +85,7 @@
 //! fly. For more information, read the RFC.
 
 use std::{
-    cmp::Ordering,
     ffi::CString,
-    hint::cold_path,
     io::{self, BufRead, Write},
 };
 
@@ -412,50 +410,51 @@ impl<'a, R: BufRead> Extractor<'a, R> {
             let packed_symbol = literals[usize::from(literal_bits & symbol_mask)];
             let literal = packed_symbol & 0x1FF;
             let literal_len = (packed_symbol >> 9) as u8;
-            self.data.advance_bits_unchecked(literal_len);
+            self.data.bit_store >>= literal_len;
+            self.data.num_of_stored_bits -= literal_len;
 
             // As per Section 3.2.3.
-            match literal.cmp(&256) {
-                Ordering::Less => output.write_literal(literal as u8),
-                Ordering::Equal => {
-                    // 256 denotes the end of this block
-                    cold_path();
-                    break;
-                }
-                Ordering::Greater => {
-                    // We have a length/distance pair. The length is already encoded
-                    // in the literal
-                    let length_index: usize = (literal - 257).into();
 
-                    let length_base = LENGTH_BASE_TABLE[length_index];
-                    let length_offset_bits = LENGTH_OFFSET_BITS_TABLE[length_index];
-
-                    let length_offset: u16 = self.data.read_bits(length_offset_bits) as u16;
-
-                    let length: usize = (length_base + length_offset).into();
-
-                    // The distance is right after the length in the stream
-                    let distance_bits: u16 = self.data.peek_bits(distance_max_length) as u16;
-
-                    let distance_mask = (1u16 << distance_max_length) - 1;
-                    let packed_distance = distances[usize::from(distance_bits & distance_mask)];
-
-                    let distance_index = usize::from(packed_distance & 0x1FF);
-                    let distance_len = (packed_distance >> 9) as u8;
-                    self.data.advance_bits_unchecked(distance_len);
-
-                    let distance_base = DISTANCE_BASE_TABLE[distance_index];
-                    let distance_offset_bits = DISTANCE_OFFSET_BITS_TABLE[distance_index];
-
-                    let distance_offset: u16 = self.data.read_bits(distance_offset_bits) as u16;
-
-                    let distance = (distance_base + distance_offset).into();
-
-                    // Check the LZ77 sliding window, and repeat `length`
-                    // bits from `distance`.
-                    output.repeat_from(distance, length);
-                }
+            if literal < 256 {
+                output.write_literal(literal as u8);
+                continue;
+            } else if literal == 256 {
+                // 256 denotes the end of this block
+                break;
             }
+
+            // We have a length/distance pair. The length is already encoded
+            // in the literal
+            let length_index: usize = (literal - 257).into();
+
+            let length_base = LENGTH_BASE_TABLE[length_index];
+            let length_offset_bits = LENGTH_OFFSET_BITS_TABLE[length_index];
+
+            let length_offset: u16 = self.data.read_bits(length_offset_bits) as u16;
+
+            let length: usize = (length_base + length_offset).into();
+
+            // The distance is right after the length in the stream
+            let distance_bits = self.data.peek_bits(distance_max_length) as u16;
+
+            let distance_mask = (1u16 << distance_max_length) - 1;
+            let packed_distance = distances[usize::from(distance_bits & distance_mask)];
+
+            let distance_index = usize::from(packed_distance & 0x1FF);
+            let distance_len = (packed_distance >> 9) as u8;
+            self.data.bit_store >>= distance_len;
+            self.data.num_of_stored_bits -= distance_len;
+
+            let distance_base = DISTANCE_BASE_TABLE[distance_index];
+            let distance_offset_bits = DISTANCE_OFFSET_BITS_TABLE[distance_index];
+
+            let distance_offset: u16 = self.data.read_bits(distance_offset_bits) as u16;
+
+            let distance = (distance_base + distance_offset).into();
+
+            // Check the LZ77 sliding window, and repeat `length`
+            // bits from `distance`.
+            output.repeat_from(distance, length);
         }
 
         Ok(())
@@ -504,7 +503,8 @@ impl<'a, R: BufRead> Extractor<'a, R> {
             let symbol: u16 = packed_value & 0x1FF;
 
             let symbol_len = (packed_value >> 9) as u8;
-            self.data.advance_bits_unchecked(symbol_len);
+            self.data.bit_store >>= symbol_len;
+            self.data.num_of_stored_bits -= symbol_len;
 
             // As per the code length alphabet described in Section 3.2.7.
             match symbol {

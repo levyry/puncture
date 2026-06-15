@@ -37,7 +37,7 @@ impl<R: BufRead> BitReader<R> {
     /// # Errors
     ///
     /// If filling the inner buffer fails, like because of hitting EOF.
-    #[inline(always)]
+    #[inline]
     pub fn peek_bits(&mut self, num_of_bits: u8) -> u128 {
         // We must advance the stream to be able to peek
         while self.num_of_stored_bits < num_of_bits {
@@ -47,26 +47,17 @@ impl<R: BufRead> BitReader<R> {
         self.bit_store & ((1 << num_of_bits) - 1)
     }
 
-    /// Advances the underlying stream by `num_of_bits` without checks.
-    ///
-    /// This can result in data loss if there are less than `num_of_bits`
-    /// bits stored in the internal buffer.
-    #[inline(always)]
-    pub const fn advance_bits_unchecked(&mut self, num_of_bits: u8) {
-        self.bit_store >>= num_of_bits;
-        self.num_of_stored_bits -= num_of_bits;
-    }
-
     /// Read at most 64 bits at a time from the underlying stream.
     ///
     /// # Errors
     ///
     /// If `num_of_bits` is greater than 64, or if filling the underlying
     /// stream fails, like because of hitting EOF.
-    #[inline(always)]
+    #[inline]
     pub fn read_bits(&mut self, num_of_bits: u8) -> u128 {
         let result = self.peek_bits(num_of_bits);
-        self.advance_bits_unchecked(num_of_bits);
+        self.bit_store >>= num_of_bits;
+        self.num_of_stored_bits -= num_of_bits;
         result
     }
 
@@ -113,7 +104,7 @@ impl<R: BufRead> BitReader<R> {
     /// # Errors
     ///
     /// See [`Self::read_bits`].
-    #[inline(always)]
+    #[inline]
     pub fn read_bytes(&mut self, num_of_bytes: u8) -> u128 {
         self.read_bits(num_of_bytes * 8)
     }
@@ -210,19 +201,6 @@ mod tests {
 
         let bits4: u8 = br.read_bits(4) as u8;
         assert_eq!(bits4, 0b1100);
-    }
-
-    #[test]
-    fn test_advance_basic_bits() {
-        let mut br = create_reader(&[0b1100_1010]);
-
-        let bits1: u8 = br.peek_bits(4) as u8;
-        assert_eq!(bits1, 0b1010);
-
-        br.advance_bits_unchecked(4);
-
-        let bits2: u8 = br.peek_bits(4) as u8;
-        assert_eq!(bits2, 0b1100);
     }
 
     #[test]

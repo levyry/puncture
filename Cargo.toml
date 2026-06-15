@@ -4,16 +4,8 @@ authors = ["Orbán Levente"]
 description = "A small gzip utility program, intentionally kept simple"
 license = "Apache-2.0 OR MIT"
 repository = "https://www.github.com/levyry/puncture"
-keywords = [
-    "compression",
-    "decompression",
-    "tool",
-    "utility",
-    "gzip",
-    "mini",
-    "educational",
-]
-categories = ["tools", "compression", "decompression"]
+keywords = ["decompression", "tool", "gzip", "mini", "educational"]
+categories = ["encoding"]
 version = "0.1.0"
 edition = "2024"
 exclude = ["tests/*", "perf_bin/*", "*.code-workspace", ".git*"]

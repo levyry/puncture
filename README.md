@@ -70,8 +70,6 @@ tl;dr: `gzip`/zlib is roughly 1.3x faster, but has a 3x larger codebase dedicate
 
 i used the [Silesia Open Source Compression Benchmark](https://mattmahoney.net/dc///silesia.html) as the input data, and [`hyperfine`](https://github.com/sharkdp/hyperfine) as the benchmark harness.
 
-as of [`4b76d7f9`](https://github.com/levyry/puncture/commit/4b76d7f928fa819ea31edb990abc40d8ada9ecda):
-
 ```bash
 hyperfine --warmup 5 --min-runs 10 \
   "puncture -cdk ./silesia.tar.gz > /dev/null" \
