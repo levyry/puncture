@@ -5,7 +5,6 @@
 //! `puncture` CLI.
 //!
 //! The primary entry points are the [`bitreader::BitReader`] and the [`extraction::Extractor`].
-#![feature(likely_unlikely)]
 
 pub mod bitreader;
 pub mod cached_writer;

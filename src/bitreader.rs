@@ -6,7 +6,7 @@
 //!
 //! Since DEFLATE uses LSB-first bit ordering, but MSB-first byte ordering,
 //! this implementation also reads bits in a similar manner.
-use std::{fmt::Debug, io::BufRead};
+use std::{fmt::Debug, hint::cold_path, io::BufRead};
 
 /// A reader that can extract bits LSB first from a stream.
 #[derive(Debug)]
@@ -78,7 +78,7 @@ impl<R: BufRead> BitReader<R> {
     fn fill_inner_buffer(&mut self) {
         let buf = self.data.fill_buf().expect("Failed to fill buffer");
 
-        if std::hint::likely(buf.len() >= 8 && self.num_of_stored_bits <= 64) {
+        if buf.len() >= 8 && self.num_of_stored_bits <= 64 {
             let val = u64::from_le_bytes(buf[..8].try_into().expect("8 bytes fit into a u64"));
 
             self.bit_store |= (val as u128) << self.num_of_stored_bits;
@@ -87,6 +87,8 @@ impl<R: BufRead> BitReader<R> {
 
             return;
         }
+
+        cold_path();
 
         let space_for_bits: usize = (128u8 - self.num_of_stored_bits).into();
 
