@@ -220,14 +220,15 @@ impl<'a, R: BufRead> Extractor<'a, R> {
         // The magic bytes are not LSB first
         self.data.read_raw_bytes(&mut magic);
 
-        if magic != GZIP_MAGIC {
-            unreachable!("Incorrect magic: {}{}", magic[0], magic[1]);
-        }
+        assert_eq!(
+            magic, GZIP_MAGIC,
+            "Incorrect magic: {}{}",
+            magic[0], magic[1]
+        );
 
         let cm: u8 = self.data.read_bytes(1) as u8;
-        if cm != CM_DEFLATE {
-            unreachable!("Incorrect compression method: {cm}");
-        }
+
+        assert_eq!(cm, CM_DEFLATE, "Incorrect compression method: {cm}");
 
         let flags: u8 = self.data.read_bytes(1) as u8;
 
@@ -236,9 +237,11 @@ impl<'a, R: BufRead> Extractor<'a, R> {
         let fname = (flags & 0x08) != 0;
         let fcomment = (flags & 0x10) != 0;
 
-        if flags & 0xE0 != 0 {
-            unreachable!("Flag reserved bits aren't zeroed out: {flags}");
-        }
+        assert_eq!(
+            flags & 0xE0,
+            0,
+            "Flag reserved bits aren't zeroed out: {flags}"
+        );
 
         // We skip MTIME, XFL and OS headers.
         let _mtime: u32 = self.data.read_bytes(4) as u32;
@@ -332,21 +335,17 @@ impl<'a, R: BufRead> Extractor<'a, R> {
         self.data.align_to_byte();
 
         let expected_crc32: u32 = self.data.read_bytes(4) as u32;
-        // let expected_isize: u32 = self.data.read_bytes(4) as u32;
+        let expected_isize: u32 = self.data.read_bytes(4) as u32;
 
-        let calculated_crc = output.finalize()?;
+        let (calculated_crc, calculated_isize) = output.finalize()?;
 
         if calculated_crc != expected_crc32 {
-            unreachable!(
-                "Calculated crc32 hash ({calculated_crc}) doesn't match expected ({expected_crc32})."
-            );
+            return Err(io::Error::other("Crc32 hash doesn't match expected."));
         }
 
-        // if calculated_isize != expected_isize {
-        //     unreachable!(
-        //         "Actual payload size ({calculated_isize}) doesn't match expected ({expected_isize})."
-        //     )
-        // }
+        if calculated_isize != expected_isize {
+            return Err(io::Error::other("Payload size doesn't match expected."));
+        }
 
         Ok(())
     }
@@ -367,8 +366,10 @@ impl<'a, R: BufRead> Extractor<'a, R> {
         let len: u16 = self.data.read_bytes(2) as u16;
         let nlen: u16 = self.data.read_bytes(2) as u16;
 
-        if len != !nlen {
-            unreachable!("Member nlen isn't one's complement of len.",);
+        if len != (!nlen) {
+            return Err(io::Error::other(
+                "Member nlen isn't one's complement of len.",
+            ));
         }
 
         let mut payload = vec![0u8; len.into()];
@@ -405,9 +406,10 @@ impl<'a, R: BufRead> Extractor<'a, R> {
 
             // First, decode the literal, to see whether this is a Distance/
             // Length pair, or just a regular Huffman code
-            let literal_bits: u16 = self.data.peek_bits(literal_max_length) as u16;
+            let literal_bits = self.data.peek_bits(literal_max_length) as u16;
             let symbol_mask = (1u16 << literal_max_length) - 1;
             let packed_symbol = literals[usize::from(literal_bits & symbol_mask)];
+
             let literal = packed_symbol & 0x1FF;
             let literal_len = (packed_symbol >> 9) as u8;
             self.data.bit_store >>= literal_len;
@@ -420,6 +422,7 @@ impl<'a, R: BufRead> Extractor<'a, R> {
                 continue;
             } else if literal == 256 {
                 // 256 denotes the end of this block
+                std::hint::cold_path();
                 break;
             }
 
@@ -430,7 +433,7 @@ impl<'a, R: BufRead> Extractor<'a, R> {
             let length_base = LENGTH_BASE_TABLE[length_index];
             let length_offset_bits = LENGTH_OFFSET_BITS_TABLE[length_index];
 
-            let length_offset: u16 = self.data.read_bits(length_offset_bits) as u16;
+            let length_offset = self.data.read_bits(length_offset_bits) as u16;
 
             let length: usize = (length_base + length_offset).into();
 
@@ -472,7 +475,7 @@ impl<'a, R: BufRead> Extractor<'a, R> {
         let hdist = self.data.read_bits(5) as u16 + 1;
         let hclen = self.data.read_bits(4) as u8 + 4;
 
-        let mut code_lengths_scratch: u64 = self.data.read_bits(hclen * 3) as u64;
+        let mut code_lengths_scratch = self.data.read_bits(hclen * 3) as u64;
 
         let mut codelength_lengths = [0u16; 19];
 
@@ -497,7 +500,7 @@ impl<'a, R: BufRead> Extractor<'a, R> {
         let mut index = 0;
         let symbol_count = (hlit + hdist).into();
         while index != symbol_count {
-            let bits: u8 = self.data.peek_bits(7) as u8;
+            let bits = self.data.peek_bits(7) as u8;
 
             let packed_value = codelength_lut[(bits & 0x7F) as usize];
             let symbol: u16 = packed_value & 0x1FF;

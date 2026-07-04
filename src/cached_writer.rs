@@ -35,6 +35,8 @@ pub struct CachedWriter<W> {
     pub write_index: usize,
     /// The hasher responsible for fast CRC-32 hash calculations
     pub crc32_hasher: Hasher,
+    /// The final payload size counter
+    pub payload_size: usize,
 }
 
 impl<W: Write> CachedWriter<W> {
@@ -45,6 +47,7 @@ impl<W: Write> CachedWriter<W> {
             buf: Box::new([0u8; TOTAL_SIZE]),
             write_index: HISTORY_SIZE,
             crc32_hasher: Hasher::new(),
+            payload_size: 0,
         }
     }
 
@@ -90,17 +93,17 @@ impl<W: Write> CachedWriter<W> {
         self.write_index += length;
     }
 
-    /// Flush the stream and get the final CRC-32 hash
+    /// Flush the stream and get the final CRC-32 hash and payload size
     ///
     /// # Errors
     ///
     /// If EOF is reached at an unexpected time.
     #[inline(always)]
-    pub fn finalize(mut self) -> io::Result<u32> {
+    pub fn finalize(mut self) -> io::Result<(u32, u32)> {
         self.update_state()?;
         self.main_stream.flush()?;
 
-        Ok(self.crc32_hasher.finalize())
+        Ok((self.crc32_hasher.finalize(), self.payload_size as u32))
     }
 
     /// Write and hash the contents of the writing buffer
@@ -111,6 +114,7 @@ impl<W: Write> CachedWriter<W> {
     #[inline(always)]
     fn update_state(&mut self) -> io::Result<()> {
         let written = &self.buf[HISTORY_SIZE..self.write_index];
+        self.payload_size += self.write_index - HISTORY_SIZE;
         self.main_stream.write_all(written)?;
         self.crc32_hasher.update(written);
 
@@ -178,10 +182,6 @@ mod tests {
 
     use super::*;
     use std::io::Write;
-
-    // ---------------------------------------------------------
-    // `write` branch coverage
-    // ---------------------------------------------------------
 
     #[test]
     fn test_write_no_wrap() -> io::Result<()> {
