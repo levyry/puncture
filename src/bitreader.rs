@@ -142,25 +142,26 @@ impl<R: BufRead> BitReader<R> {
     ///
     /// Used for magic numbers, strings, and uncompressed block payloads.
     ///
-    /// # Errors
+    /// # Panics
     ///
-    /// See [`Self::read_bits`].
+    /// If EOF is hit before the buffer could be filled.
     pub fn read_raw_bytes(&mut self, buf: &mut [u8]) {
-        for byte in buf.iter_mut() {
-            if self.num_of_stored_bits >= 8 {
-                *byte = (self.bit_store & 0xFF)
-                    .try_into()
-                    .expect("We masked for the bottom 8 bits");
+        assert!(self.num_of_stored_bits.is_multiple_of(8));
 
-                self.bit_store >>= 8;
-                self.num_of_stored_bits -= 8;
-            } else {
-                let mut temp = [0u8; 1];
-                self.data
-                    .read_exact(&mut temp)
-                    .expect("Hit EOF while reading raw bytes");
-                *byte = temp[0];
-            }
+        let num_of_stored_bytes: usize = (self.num_of_stored_bits / 8).into();
+        let inner_bytes = num_of_stored_bytes.min(buf.len());
+
+        // Take from the inner bit buffer first
+        for byte in &mut buf[..inner_bytes] {
+            *byte = (self.bit_store & 0xFF) as u8;
+            self.bit_store >>= 8;
+            self.num_of_stored_bits -= 8;
+        }
+
+        if inner_bytes < buf.len() {
+            self.data
+                .read_exact(&mut buf[inner_bytes..])
+                .expect("Hit EOF while reading raw bytes");
         }
     }
 }
