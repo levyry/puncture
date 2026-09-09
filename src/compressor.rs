@@ -1,4 +1,3 @@
-use core::panic;
 use std::io;
 
 use crc32fast::Hasher;
@@ -36,13 +35,9 @@ pub struct Compressor<W> {
     pub prev: Box<[u16; HISTORY_SIZE]>,
 
     pub current_pos: usize,
-
     pub lookahead: usize,
-
     pub crc32_hasher: Hasher,
     pub payload_size: u32,
-
-    pub wrote_header: bool,
 }
 
 impl<W: io::Write> Compressor<W> {
@@ -56,8 +51,19 @@ impl<W: io::Write> Compressor<W> {
             lookahead: 0,
             crc32_hasher: Hasher::new(),
             payload_size: 0,
-            wrote_header: false,
         }
+    }
+
+    // TODO: don't start the block here, and add actual header logic
+    pub fn write_header(&mut self) -> io::Result<()> {
+        self.bit_writer
+            .data
+            .write_all(&[0x1F, 0x8B, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF])?;
+
+        // Use fixed Huffman for now
+        self.bit_writer.write_bits(0b011, 3)?;
+
+        Ok(())
     }
 
     /// Fast 3-byte integer hash
@@ -97,7 +103,11 @@ impl<W: io::Write> Compressor<W> {
                 let (len_bit_length, len_base_code) = match len_symbol {
                     257..=279 => (7, len_symbol - 256),
                     280..=285 => (8, len_symbol - 280 + 0xC0),
-                    _ => panic!("invalid len_symbol: {len_symbol}"),
+                    _ => {
+                        return Err(io::Error::other(format!(
+                            "invalid len_symbol: {len_symbol}"
+                        )));
+                    }
                 };
 
                 self.bit_writer.write_bits(
@@ -260,15 +270,6 @@ impl<W: io::Write> io::Write for Compressor<W> {
 
             self.lookahead += to_write;
             written += to_write;
-
-            if !self.wrote_header {
-                self.wrote_header = true;
-                self.bit_writer
-                    .data
-                    .write_all(&[0x1F, 0x8B, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF])?;
-                // Use fixed Huffman for now
-                self.bit_writer.write_bits(0b011, 3)?;
-            }
 
             self.compress_data()?;
 

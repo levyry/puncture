@@ -89,7 +89,7 @@ use std::{
     io::{self, BufRead, Write},
 };
 
-use crate::{bitreader::BitReader, cached_writer::CachedWriter};
+use crate::{GzipHeader, bitreader::BitReader, cached_writer::CachedWriter};
 
 const GZIP_MAGIC: [u8; 2] = [0x1F, 0x8B];
 const CM_DEFLATE: u8 = 8;
@@ -183,8 +183,6 @@ pub const FIXED_DISTANCES_LUT: [u16; 32] = {
 pub struct Extractor<R> {
     /// The input data, wrapped in a [`BitReader`].
     pub data: BitReader<R>,
-    /// The original file name in the GZIP header, if it is present.
-    pub file_name: Option<CString>,
 }
 
 impl<R: BufRead> Extractor<R> {
@@ -193,14 +191,7 @@ impl<R: BufRead> Extractor<R> {
     pub const fn new(data: R) -> Self {
         Self {
             data: BitReader::new(data),
-            file_name: None,
         }
-    }
-
-    /// Provides a reference to the parsed file name if it exists.
-    #[must_use]
-    pub const fn get_file_name(&self) -> Option<&CString> {
-        self.file_name.as_ref()
     }
 
     /// Processes the GZIP header.
@@ -215,21 +206,28 @@ impl<R: BufRead> Extractor<R> {
     /// * If the magic bytes aren't correct
     /// * If the compression method isn't `0x08`
     /// * If the reserved flag bits aren't zeroed out
-    pub fn process_header(&mut self) {
+    pub fn process_header(&mut self) -> io::Result<GzipHeader> {
+        let mut header = GzipHeader::default();
+
         let mut magic = [0; 2];
 
         // The magic bytes are not LSB first
         self.data.read_raw_bytes(&mut magic);
 
-        assert_eq!(
-            magic, GZIP_MAGIC,
-            "Incorrect magic: {}{}",
-            magic[0], magic[1]
-        );
+        if magic != GZIP_MAGIC {
+            return Err(io::Error::other(format!(
+                "Invalid gzip magic bytes. Expected 0x1F8B, found 0x{:X}{:X}.",
+                magic[0], magic[1]
+            )));
+        }
 
         let cm: u8 = self.data.read_bytes(1) as u8;
 
-        assert_eq!(cm, CM_DEFLATE, "Incorrect compression method: {cm}");
+        if cm != CM_DEFLATE {
+            return Err(io::Error::other(format!(
+                "Invalid compression method. Expected 0x08, found 0x{cm:X}."
+            )));
+        }
 
         let flags: u8 = self.data.read_bytes(1) as u8;
 
@@ -238,15 +236,15 @@ impl<R: BufRead> Extractor<R> {
         let fname = (flags & 0x08) != 0;
         let fcomment = (flags & 0x10) != 0;
 
-        assert_eq!(
-            flags & 0xE0,
-            0,
-            "Flag reserved bits aren't zeroed out: {flags}"
-        );
+        if flags & 0xE0 != 0 {
+            return Err(io::Error::other(format!(
+                "Flag reserved bits are set: {flags:X}."
+            )));
+        }
 
-        // We skip MTIME, XFL and OS headers.
-        let _mtime: u32 = self.data.read_bytes(4) as u32;
-        let _xfl_and_os: u16 = self.data.read_bytes(2) as u16;
+        header.mtime = self.data.read_bytes(4) as u32;
+        header.xfl = self.data.read_bytes(1) as u8;
+        header.os = self.data.read_bytes(1) as u8;
 
         if fextra {
             let xlen: u16 = self.data.read_bytes(2) as u16;
@@ -263,7 +261,7 @@ impl<R: BufRead> Extractor<R> {
                     break;
                 }
             }
-            self.file_name = Some(
+            header.file_name = Some(
                 CString::from_vec_with_nul(name).expect("A null byte is always the last element."),
             );
         }
@@ -277,10 +275,13 @@ impl<R: BufRead> Extractor<R> {
                 }
             }
         }
+
         // TODO: Currently, the crc16 field is ignored if it exists.
         // I could calculate this, but then I would need to keep a
         // seperate buffer for all the header fields I read in.
         let mut _crc16: Option<u16> = fhcrc.then(|| self.data.read_bytes(2) as u16);
+
+        Ok(header)
     }
 
     /// Runs the DEFLATE algorithm and writes the result to output.

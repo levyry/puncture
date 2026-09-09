@@ -16,7 +16,7 @@ fn test_dynamic_huffman_random() {
     let cursor = Cursor::new(compressed_data);
     let mut ext = Extractor::new(cursor);
 
-    ext.process_header();
+    let _ = ext.process_header();
 
     // Act
     let mut output_buffer = Vec::new();
@@ -42,7 +42,7 @@ fn test_dynamic_huffman_shakespeare() {
     let cursor = Cursor::new(compressed_data);
     let mut ext = Extractor::new(cursor);
 
-    ext.process_header();
+    let _ = ext.process_header();
 
     // Act
     let mut output_buffer = Vec::new();
@@ -68,7 +68,7 @@ fn test_fixed_huffman_random() {
     let cursor = Cursor::new(compressed_data);
     let mut ext = Extractor::new(cursor);
 
-    ext.process_header();
+    let _ = ext.process_header();
 
     // Act
     let mut output_buffer = Vec::new();
@@ -94,7 +94,7 @@ fn test_fixed_huffman_shakespeare() {
     let cursor = Cursor::new(compressed_data);
     let mut ext = Extractor::new(cursor);
 
-    ext.process_header();
+    let _ = ext.process_header();
 
     // Act
     let mut output_buffer = Vec::new();
@@ -120,7 +120,7 @@ fn test_no_compr_random() {
     let cursor = Cursor::new(compressed_data);
     let mut ext = Extractor::new(cursor);
 
-    ext.process_header();
+    let _ = ext.process_header();
 
     // Act
     let mut output_buffer = Vec::new();
@@ -146,7 +146,7 @@ fn test_no_compr_shakespeare() {
     let cursor = Cursor::new(compressed_data);
     let mut ext = Extractor::new(cursor);
 
-    ext.process_header();
+    let _ = ext.process_header();
 
     // Act
     let mut output_buffer = Vec::new();

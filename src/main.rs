@@ -44,22 +44,22 @@ fn main() -> Result<(), io::Error> {
 
 fn run_extraction<R: BufRead>(to_stdout: bool, file: &str, input_stream: R) -> io::Result<()> {
     let mut ext = Extractor::new(input_stream);
-    ext.process_header();
+
+    let header = ext.process_header()?;
 
     let mut output_stream: Box<dyn Write> = if to_stdout || file == "-" {
         Box::new(std::io::stdout())
     } else {
-        let file_name = ext.get_file_name().map_or(
-            Ok(String::from(file)),
-            |def| -> io::Result<String> {
-                let embedded_name = def
-                    .clone()
-                    .into_string()
-                    .map_err(|_| io::Error::other("Original file name isn't valid UTF8"))?;
+        let file_name =
+            header
+                .file_name
+                .map_or(Ok(String::from(file)), |def| -> io::Result<String> {
+                    let embedded_name = def
+                        .into_string()
+                        .map_err(|_| io::Error::other("Original file name isn't valid UTF8"))?;
 
-                Ok(format!("{embedded_name}.gz"))
-            },
-        )?;
+                    Ok(format!("{embedded_name}.gz"))
+                })?;
 
         Box::new(File::create_new(
             PathBuf::from(file_name).with_extension(""),
@@ -79,6 +79,8 @@ fn run_compression<R: BufRead>(to_stdout: bool, file: &str, mut input_stream: R)
     };
 
     let mut compr = Compressor::new(output_stream);
+
+    compr.write_header()?;
 
     std::io::copy(&mut input_stream, &mut compr)?;
 
