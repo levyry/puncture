@@ -60,8 +60,8 @@ impl<W: io::Write> Compressor<W> {
             .data
             .write_all(&[0x1F, 0x8B, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF])?;
 
-        // Use fixed Huffman for now
-        self.bit_writer.write_bits(0b011, 3)?;
+        // Use a non-final, fixed Huffman for now
+        self.bit_writer.write_bits(0b010, 3)?;
 
         Ok(())
     }
@@ -231,6 +231,10 @@ impl<W: io::Write> Compressor<W> {
             self.lookahead -= 1;
         }
 
+        self.bit_writer.write_bits(0, 7)?;
+
+        // Emit an empty, final block
+        self.bit_writer.write_bits(0b011, 3)?;
         self.bit_writer.write_bits(0, 7)?;
 
         self.bit_writer.force_align()?;
