@@ -31,7 +31,12 @@ fn main() -> Result<(), io::Error> {
         if args.decompress {
             run_extraction(args.to_stdout, &file, input_stream)?;
         } else {
-            run_compression(args.to_stdout, &file, input_stream)?;
+            run_compression(
+                args.to_stdout,
+                args.compr_lvl.to_max_chain(),
+                &file,
+                input_stream,
+            )?;
         }
 
         if file != "-" && !args.to_stdout && !args.keep_input {
@@ -69,7 +74,12 @@ fn run_extraction<R: BufRead>(to_stdout: bool, file: &str, input_stream: R) -> i
     ext.deflate(&mut output_stream)
 }
 
-fn run_compression<R: BufRead>(to_stdout: bool, file: &str, mut input_stream: R) -> io::Result<()> {
+fn run_compression<R: BufRead>(
+    to_stdout: bool,
+    max_chain: u32,
+    file: &str,
+    mut input_stream: R,
+) -> io::Result<()> {
     let output_stream: Box<dyn Write> = if to_stdout || file == "-" {
         Box::new(std::io::stdout())
     } else {
@@ -78,7 +88,7 @@ fn run_compression<R: BufRead>(to_stdout: bool, file: &str, mut input_stream: R)
         )?)
     };
 
-    let mut compr = Compressor::new(output_stream);
+    let mut compr = Compressor::new(output_stream, max_chain);
 
     compr.write_header()?;
 

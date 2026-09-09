@@ -38,10 +38,11 @@ pub struct Compressor<W> {
     pub lookahead: usize,
     pub crc32_hasher: Hasher,
     pub payload_size: u32,
+    pub max_chain: u32,
 }
 
 impl<W: io::Write> Compressor<W> {
-    pub fn new(stream: W) -> Self {
+    pub fn new(stream: W, max_chain: u32) -> Self {
         Self {
             bit_writer: BitWriter::new(stream),
             data: Box::new([0u8; TOTAL_SIZE]),
@@ -51,6 +52,7 @@ impl<W: io::Write> Compressor<W> {
             lookahead: 0,
             crc32_hasher: Hasher::new(),
             payload_size: 0,
+            max_chain,
         }
     }
 
@@ -66,83 +68,22 @@ impl<W: io::Write> Compressor<W> {
         Ok(())
     }
 
-    /// Fast 3-byte integer hash
-    #[inline(always)]
-    const fn hash_3_bytes(sequence: &[u8]) -> usize {
-        let h = (sequence[0] as usize) << 10 ^ (sequence[1] as usize) << 5 ^ (sequence[2] as usize);
-        h & HASH_MASK
-    }
-
     fn compress_data(&mut self) -> io::Result<()> {
         while self.lookahead > MIN_MATCH {
             let (best_length, best_distance) = self.find_best_match();
 
             if best_length < MIN_MATCH {
-                // Emit a literal
-                let literal = self.data[self.current_pos];
-
-                let (bit_length, base_code) = match literal {
-                    0..=143 => (8, u16::from(literal) + 0x30),
-                    144..=255 => (9, u16::from(literal) + 0x100),
-                };
-
-                self.bit_writer
-                    .write_bits(base_code.reverse_bits() >> (16 - bit_length), bit_length)?;
-
-                self.current_pos += 1;
-                self.lookahead -= 1;
+                self.emit_literal()?;
             } else {
-                // Emit a length followed by a distance. Length first:
-                let mut index = 0;
-                while index < 28 && LENGTH_BASE_TABLE[index + 1] <= best_length as u16 {
-                    index += 1;
-                }
-
-                let len_symbol = 257 + index as u16;
-
-                let (len_bit_length, len_base_code) = match len_symbol {
-                    257..=279 => (7, len_symbol - 256),
-                    280..=285 => (8, len_symbol - 280 + 0xC0),
-                    _ => {
-                        return Err(io::Error::other(format!(
-                            "invalid len_symbol: {len_symbol}"
-                        )));
-                    }
-                };
-
-                self.bit_writer.write_bits(
-                    len_base_code.reverse_bits() >> (16 - len_bit_length),
-                    len_bit_length,
-                )?;
-
-                let extra_bits = best_length as u16 - LENGTH_BASE_TABLE[index];
-                if LENGTH_OFFSET_BITS_TABLE[index] > 0 {
-                    self.bit_writer
-                        .write_bits(extra_bits, LENGTH_OFFSET_BITS_TABLE[index])?;
-                }
-
-                // Now distance
-                let mut index = 0;
-                while index < 29 && DISTANCE_BASE_TABLE[index + 1] <= best_distance as u16 {
-                    index += 1;
-                }
-
-                let dist_symbol = index as u16;
-
-                self.bit_writer
-                    .write_bits(dist_symbol.reverse_bits() >> 11, 5)?;
-
-                let extra_bits = best_distance as u16 - DISTANCE_BASE_TABLE[index];
-                if DISTANCE_OFFSET_BITS_TABLE[index] > 0 {
-                    self.bit_writer
-                        .write_bits(extra_bits, DISTANCE_OFFSET_BITS_TABLE[index])?;
-                }
-
-                // Advance past the first byte because it was hashed in `find_best_match`
+                // Advance state, as current byte was already hashed in
+                // `self.find_best_match`
                 self.current_pos += 1;
                 self.lookahead -= 1;
 
-                // Hash and advance the remaining bytes, safely bounded
+                self.emit_length_ptr(best_length)?;
+                self.emit_dist_ptr(best_distance)?;
+
+                // Hash and advance the remaining bytes
                 for _ in 1..best_length {
                     if self.lookahead >= MIN_MATCH {
                         self.update_hash_chain();
@@ -163,31 +104,44 @@ impl<W: io::Write> Compressor<W> {
         let mut best_distance = 0;
 
         let mut match_pos = prev_match_pos as usize;
-
         let mut chain_counter = 0;
 
-        while match_pos > 0 && (self.current_pos - match_pos) <= HISTORY_SIZE && chain_counter < 256
+        let max_len = MAX_MATCH.min(self.lookahead);
+
+        while match_pos > 0
+            && (self.current_pos - match_pos) <= HISTORY_SIZE
+            && chain_counter < self.max_chain
         {
-            let mut current_length = 0;
-            for i in 0..MAX_MATCH.min(self.lookahead) {
-                if self.data[match_pos + i] != self.data[self.current_pos + i] {
-                    break;
-                }
-                current_length += 1;
+            // Check the byte at `best_length` first. If they don't match,
+            // we can skip to the next iteration early.
+            if best_length < max_len
+                && self.data[match_pos + best_length] != self.data[self.current_pos + best_length]
+            {
+                match_pos = self.prev[match_pos % HISTORY_SIZE] as usize;
+                chain_counter += 1;
+                continue;
             }
 
-            if current_length >= best_length {
+            let match_slice = &self.data[match_pos..match_pos + max_len];
+            let curr_slice = &self.data[self.current_pos..self.current_pos + max_len];
+
+            let current_length = std::iter::zip(match_slice, curr_slice)
+                .take_while(|(a, b)| a == b)
+                .count();
+
+            if current_length > best_length {
                 best_length = current_length;
                 best_distance = self.current_pos - match_pos;
             }
 
-            if best_length == MAX_MATCH {
+            if best_length == max_len {
                 break;
             }
 
             match_pos = self.prev[match_pos % HISTORY_SIZE] as usize;
             chain_counter += 1;
         }
+
         (best_length, best_distance)
     }
 
@@ -200,6 +154,76 @@ impl<W: io::Write> Compressor<W> {
         self.head[hash] = self.current_pos as u16;
 
         prev_match_pos
+    }
+
+    /// Fast 3-byte integer hash
+    #[inline(always)]
+    const fn hash_3_bytes(sequence: &[u8]) -> usize {
+        let h = (sequence[0] as usize) << 10 ^ (sequence[1] as usize) << 5 ^ (sequence[2] as usize);
+        h & HASH_MASK
+    }
+
+    fn emit_literal(&mut self) -> Result<(), io::Error> {
+        let literal = self.data[self.current_pos];
+
+        let (bit_length, base_code) = match literal {
+            0..=143 => (8, u16::from(literal) + 0x30),
+            144..=255 => (9, u16::from(literal) + 0x100),
+        };
+
+        self.bit_writer
+            .write_bits(base_code.reverse_bits() >> (16 - bit_length), bit_length)?;
+
+        self.current_pos += 1;
+        self.lookahead -= 1;
+
+        Ok(())
+    }
+
+    fn emit_dist_ptr(&mut self, best_distance: usize) -> Result<(), io::Error> {
+        let mut index = 0;
+        while index < 29 && DISTANCE_BASE_TABLE[index + 1] <= best_distance as u16 {
+            index += 1;
+        }
+
+        let dist_symbol = index as u16;
+        self.bit_writer
+            .write_bits(dist_symbol.reverse_bits() >> 11, 5)?;
+
+        let extra_bits = best_distance as u16 - DISTANCE_BASE_TABLE[index];
+        if DISTANCE_OFFSET_BITS_TABLE[index] > 0 {
+            self.bit_writer
+                .write_bits(extra_bits, DISTANCE_OFFSET_BITS_TABLE[index])?;
+        }
+
+        Ok(())
+    }
+
+    fn emit_length_ptr(&mut self, best_length: usize) -> Result<(), io::Error> {
+        let mut index = 0;
+        while index < 28 && LENGTH_BASE_TABLE[index + 1] <= best_length as u16 {
+            index += 1;
+        }
+
+        let symbol = 257 + index as u16;
+        let (bit_length, base_code) = match symbol {
+            257..=279 => (7, symbol - 256),
+            280..=285 => (8, symbol - 280 + 0xC0),
+            _ => {
+                return Err(io::Error::other(format!("invalid length symbol: {symbol}")));
+            }
+        };
+
+        self.bit_writer
+            .write_bits(base_code.reverse_bits() >> (16 - bit_length), bit_length)?;
+
+        let extra_bits = best_length as u16 - LENGTH_BASE_TABLE[index];
+        if LENGTH_OFFSET_BITS_TABLE[index] > 0 {
+            self.bit_writer
+                .write_bits(extra_bits, LENGTH_OFFSET_BITS_TABLE[index])?;
+        }
+
+        Ok(())
     }
 
     fn slide_window(&mut self) {
@@ -217,18 +241,7 @@ impl<W: io::Write> Compressor<W> {
 
     pub fn finish(mut self) -> io::Result<()> {
         while self.lookahead > 0 {
-            let literal = self.data[self.current_pos];
-
-            let (bit_length, base_code) = match literal {
-                0..=143 => (8, u16::from(literal) + 0x30),
-                144..=255 => (9, u16::from(literal) + 0x100),
-            };
-
-            self.bit_writer
-                .write_bits(base_code.reverse_bits() >> (16 - bit_length), bit_length)?;
-
-            self.current_pos += 1;
-            self.lookahead -= 1;
+            self.emit_literal()?;
         }
 
         self.bit_writer.write_bits(0, 7)?;
