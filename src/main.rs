@@ -12,12 +12,12 @@
 use std::{
     fs::File,
     io::{self, BufRead, BufReader, IsTerminal, Write},
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 use clap::{Arg, ArgAction, ArgMatches, Command};
 
-use puncture::{bitreader::BitReader, extraction::Extractor};
+use puncture::{bitreader::BitReader, compressor::Compressor, extraction::Extractor};
 
 fn main() -> Result<(), io::Error> {
     let args = get_cli_args()?;
@@ -52,8 +52,21 @@ fn main() -> Result<(), io::Error> {
                 }
             }
         } else {
-            eprintln!("Compression is not yet implemented. Use -d to decompress.");
-            std::process::exit(1);
+            if file == "-" {
+                let input_stream =
+                    Box::new(BufReader::with_capacity(1024 * 1024, std::io::stdin()));
+
+                run_compression(to_stdout, file, input_stream)?;
+            } else {
+                let input_stream =
+                    Box::new(BufReader::with_capacity(1024 * 1024, File::open(file)?));
+
+                run_compression(to_stdout, file, input_stream)?;
+
+                if !to_stdout && !keep {
+                    std::fs::remove_file(file)?;
+                }
+            }
         }
     }
 
@@ -146,4 +159,22 @@ fn run_extraction<R: BufRead>(to_stdout: bool, file: &str, input_stream: R) -> i
     let mut output_stream = get_output_stream(to_stdout, file, &ext)?;
 
     ext.deflate(&mut output_stream)
+}
+
+fn run_compression<R: BufRead>(to_stdout: bool, file: &str, mut input_stream: R) -> io::Result<()> {
+    let output_stream: Box<dyn Write> = if to_stdout || file == "-" {
+        Box::new(std::io::stdout())
+    } else {
+        Box::new(File::create_new(
+            PathBuf::from(file).with_added_extension("gz"),
+        )?)
+    };
+
+    let mut compr = Compressor::new(output_stream);
+
+    std::io::copy(&mut input_stream, &mut compr)?;
+
+    compr.finish()?;
+
+    Ok(())
 }

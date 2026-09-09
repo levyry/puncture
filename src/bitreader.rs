@@ -72,7 +72,7 @@ impl<R: BufRead> BitReader<R> {
         if buf.len() >= 8 && self.num_of_stored_bits <= 64 {
             let val = u64::from_le_bytes(buf[..8].try_into().expect("8 bytes fit into a u64"));
 
-            self.bit_store |= (val as u128) << self.num_of_stored_bits;
+            self.bit_store |= u128::from(val) << self.num_of_stored_bits;
             self.num_of_stored_bits += 64;
             self.data.consume(8);
 

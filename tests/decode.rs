@@ -1,10 +1,11 @@
+#![expect(clippy::expect_used)]
+
 use puncture::bitreader::BitReader;
 use puncture::extraction::Extractor;
 use std::fs;
 use std::io::Cursor;
 
 #[test]
-#[expect(clippy::expect_used)]
 fn test_dynamic_huffman_random() {
     // Arrange
     let archive_path = "tests/data/dynamic/large_random.txt.gz";
@@ -32,7 +33,6 @@ fn test_dynamic_huffman_random() {
 }
 
 #[test]
-#[expect(clippy::expect_used)]
 fn test_dynamic_huffman_shakespeare() {
     // Arrange
     let archive_path = "tests/data/dynamic/shakespeare.txt.gz";
@@ -60,7 +60,6 @@ fn test_dynamic_huffman_shakespeare() {
 }
 
 #[test]
-#[expect(clippy::expect_used)]
 fn test_fixed_huffman_random() {
     // Arrange
     let archive_path = "tests/data/fixed/large_random.txt.gz";
@@ -88,7 +87,6 @@ fn test_fixed_huffman_random() {
 }
 
 #[test]
-#[expect(clippy::expect_used)]
 fn test_fixed_huffman_shakespeare() {
     // Arrange
     let archive_path = "tests/data/fixed/shakespeare.txt.gz";
@@ -116,7 +114,6 @@ fn test_fixed_huffman_shakespeare() {
 }
 
 #[test]
-#[expect(clippy::expect_used)]
 fn test_no_compr_random() {
     // Arrange
     let archive_path = "tests/data/nocompr/large_random.txt.gz";
@@ -144,7 +141,6 @@ fn test_no_compr_random() {
 }
 
 #[test]
-#[expect(clippy::expect_used)]
 fn test_no_compr_shakespeare() {
     // Arrange
     let archive_path = "tests/data/nocompr/shakespeare.txt.gz";
