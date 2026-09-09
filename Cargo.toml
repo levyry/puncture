@@ -12,12 +12,7 @@ exclude = ["tests/*", "perf_bin/*", "*.code-workspace", ".git*"]
 rust-version = "1.95.0"
 
 [dependencies]
-clap = { version = "4", default-features = false, features = [
-    "std",
-    "help",
-    "usage",
-    "error-context",
-] }
+clap = { version = "4.6", features = ["derive"] }
 crc32fast = "1.5"
 
 

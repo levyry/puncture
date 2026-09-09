@@ -1,6 +1,5 @@
 #![expect(clippy::expect_used)]
 
-use puncture::bitreader::BitReader;
 use puncture::extraction::Extractor;
 use std::fs;
 use std::io::Cursor;
@@ -15,8 +14,7 @@ fn test_dynamic_huffman_random() {
     let expected_output = fs::read(expected_text_path).expect("Failed to read expected text file");
 
     let cursor = Cursor::new(compressed_data);
-    let mut br = BitReader::new(cursor);
-    let mut ext = Extractor::new(&mut br);
+    let mut ext = Extractor::new(cursor);
 
     ext.process_header();
 
@@ -42,8 +40,7 @@ fn test_dynamic_huffman_shakespeare() {
     let expected_output = fs::read(expected_text_path).expect("Failed to read expected text file");
 
     let cursor = Cursor::new(compressed_data);
-    let mut br = BitReader::new(cursor);
-    let mut ext = Extractor::new(&mut br);
+    let mut ext = Extractor::new(cursor);
 
     ext.process_header();
 
@@ -69,8 +66,7 @@ fn test_fixed_huffman_random() {
     let expected_output = fs::read(expected_text_path).expect("Failed to read expected text file");
 
     let cursor = Cursor::new(compressed_data);
-    let mut br = BitReader::new(cursor);
-    let mut ext = Extractor::new(&mut br);
+    let mut ext = Extractor::new(cursor);
 
     ext.process_header();
 
@@ -96,8 +92,7 @@ fn test_fixed_huffman_shakespeare() {
     let expected_output = fs::read(expected_text_path).expect("Failed to read expected text file");
 
     let cursor = Cursor::new(compressed_data);
-    let mut br = BitReader::new(cursor);
-    let mut ext = Extractor::new(&mut br);
+    let mut ext = Extractor::new(cursor);
 
     ext.process_header();
 
@@ -123,8 +118,7 @@ fn test_no_compr_random() {
     let expected_output = fs::read(expected_text_path).expect("Failed to read expected text file");
 
     let cursor = Cursor::new(compressed_data);
-    let mut br = BitReader::new(cursor);
-    let mut ext = Extractor::new(&mut br);
+    let mut ext = Extractor::new(cursor);
 
     ext.process_header();
 
@@ -150,8 +144,7 @@ fn test_no_compr_shakespeare() {
     let expected_output = fs::read(expected_text_path).expect("Failed to read expected text file");
 
     let cursor = Cursor::new(compressed_data);
-    let mut br = BitReader::new(cursor);
-    let mut ext = Extractor::new(&mut br);
+    let mut ext = Extractor::new(cursor);
 
     ext.process_header();
 

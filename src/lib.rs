@@ -6,6 +6,7 @@
 //!
 //! The primary entry points are the [`bitreader::BitReader`] and the [`extraction::Extractor`].
 
+pub mod args;
 pub mod bitreader;
 pub mod bitwriter;
 pub mod cached_writer;

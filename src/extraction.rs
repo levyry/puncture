@@ -180,18 +180,19 @@ pub const FIXED_DISTANCES_LUT: [u16; 32] = {
 
 /// The main struct driving the extraction process
 #[derive(Debug)]
-pub struct Extractor<'a, R> {
+pub struct Extractor<R> {
     /// The input data, wrapped in a [`BitReader`].
-    pub data: &'a mut BitReader<R>,
+    pub data: BitReader<R>,
     /// The original file name in the GZIP header, if it is present.
     pub file_name: Option<CString>,
 }
 
-impl<'a, R: BufRead> Extractor<'a, R> {
-    /// Creates a new [`Extractor`] by wrapping a [`BitReader`].
-    pub const fn new(data: &'a mut BitReader<R>) -> Self {
+impl<R: BufRead> Extractor<R> {
+    /// Creates a new [`Extractor`] by wrapping an input stream into a
+    /// [`BitReader`].
+    pub const fn new(data: R) -> Self {
         Self {
-            data,
+            data: BitReader::new(data),
             file_name: None,
         }
     }
