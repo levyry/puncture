@@ -15,6 +15,8 @@ rust-version = "1.95.0"
 clap = { version = "4.6", features = ["derive"] }
 crc32fast = "1.5"
 
+[dev-dependencies]
+assert_cmd = "2.2.2"
 
 [lints.clippy]
 pedantic = { level = "warn", priority = -1 }

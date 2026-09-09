@@ -1,161 +1,72 @@
-#![expect(clippy::expect_used)]
+#![expect(clippy::unwrap_used, clippy::panic_in_result_fn)]
 
-use puncture::extraction::Extractor;
-use std::fs;
-use std::io::Cursor;
+use assert_cmd::Command;
+use std::{fs, io};
 
-#[test]
-fn test_dynamic_huffman_random() {
-    // Arrange
-    let archive_path = "tests/data/dynamic/large_random.txt.gz";
-    let expected_text_path = "tests/data/original/large_random.txt";
+fn run_decompression(archive_path: &str, expected_path: &str) -> io::Result<()> {
+    let cmd = Command::cargo_bin("puncture")
+        .unwrap()
+        .args(["-d", "-c", "-k", archive_path])
+        .assert()
+        .success();
 
-    let compressed_data = fs::read(archive_path).expect("Failed to read compressed file");
-    let expected_output = fs::read(expected_text_path).expect("Failed to read expected text file");
+    let actual = &cmd.get_output().stdout;
+    let expected = fs::read(expected_path)?;
 
-    let cursor = Cursor::new(compressed_data);
-    let mut ext = Extractor::new(cursor);
-
-    let _ = ext.process_header();
-
-    // Act
-    let mut output_buffer = Vec::new();
-    ext.deflate(&mut output_buffer)
-        .expect("Failed to deflate payload");
-
-    // Assert
-    assert_eq!(
-        output_buffer, expected_output,
-        "Decompressed buffer did not match expected output"
+    assert!(
+        actual == &expected,
+        "Decompressed output for '{archive_path}' did not match the original file '{expected_path}'. Expected length: {} Actual length: {}",
+        expected.len(),
+        actual.len(),
     );
+
+    Ok(())
 }
 
 #[test]
-fn test_dynamic_huffman_shakespeare() {
-    // Arrange
-    let archive_path = "tests/data/dynamic/shakespeare.txt.gz";
-    let expected_text_path = "tests/data/original/shakespeare.txt";
-
-    let compressed_data = fs::read(archive_path).expect("Failed to read compressed file");
-    let expected_output = fs::read(expected_text_path).expect("Failed to read expected text file");
-
-    let cursor = Cursor::new(compressed_data);
-    let mut ext = Extractor::new(cursor);
-
-    let _ = ext.process_header();
-
-    // Act
-    let mut output_buffer = Vec::new();
-    ext.deflate(&mut output_buffer)
-        .expect("Failed to deflate payload");
-
-    // Assert
-    assert_eq!(
-        output_buffer, expected_output,
-        "Decompressed buffer did not match expected output"
-    );
+fn test_dynamic_huffman_random() -> io::Result<()> {
+    run_decompression(
+        "tests/data/dynamic/large_random.txt.gz",
+        "tests/data/original/large_random.txt",
+    )
 }
 
 #[test]
-fn test_fixed_huffman_random() {
-    // Arrange
-    let archive_path = "tests/data/fixed/large_random.txt.gz";
-    let expected_text_path = "tests/data/original/large_random.txt";
-
-    let compressed_data = fs::read(archive_path).expect("Failed to read compressed file");
-    let expected_output = fs::read(expected_text_path).expect("Failed to read expected text file");
-
-    let cursor = Cursor::new(compressed_data);
-    let mut ext = Extractor::new(cursor);
-
-    let _ = ext.process_header();
-
-    // Act
-    let mut output_buffer = Vec::new();
-    ext.deflate(&mut output_buffer)
-        .expect("Failed to deflate payload");
-
-    // Assert
-    assert_eq!(
-        output_buffer, expected_output,
-        "Decompressed buffer did not match expected output"
-    );
+fn test_dynamic_huffman_shakespeare() -> io::Result<()> {
+    run_decompression(
+        "tests/data/dynamic/shakespeare.txt.gz",
+        "tests/data/original/shakespeare.txt",
+    )
 }
 
 #[test]
-fn test_fixed_huffman_shakespeare() {
-    // Arrange
-    let archive_path = "tests/data/fixed/shakespeare.txt.gz";
-    let expected_text_path = "tests/data/original/shakespeare.txt";
-
-    let compressed_data = fs::read(archive_path).expect("Failed to read compressed file");
-    let expected_output = fs::read(expected_text_path).expect("Failed to read expected text file");
-
-    let cursor = Cursor::new(compressed_data);
-    let mut ext = Extractor::new(cursor);
-
-    let _ = ext.process_header();
-
-    // Act
-    let mut output_buffer = Vec::new();
-    ext.deflate(&mut output_buffer)
-        .expect("Failed to deflate payload");
-
-    // Assert
-    assert_eq!(
-        output_buffer, expected_output,
-        "Decompressed buffer did not match expected output"
-    );
+fn test_fixed_huffman_random() -> io::Result<()> {
+    run_decompression(
+        "tests/data/fixed/large_random.txt.gz",
+        "tests/data/original/large_random.txt",
+    )
 }
 
 #[test]
-fn test_no_compr_random() {
-    // Arrange
-    let archive_path = "tests/data/nocompr/large_random.txt.gz";
-    let expected_text_path = "tests/data/original/large_random.txt";
-
-    let compressed_data = fs::read(archive_path).expect("Failed to read compressed file");
-    let expected_output = fs::read(expected_text_path).expect("Failed to read expected text file");
-
-    let cursor = Cursor::new(compressed_data);
-    let mut ext = Extractor::new(cursor);
-
-    let _ = ext.process_header();
-
-    // Act
-    let mut output_buffer = Vec::new();
-    ext.deflate(&mut output_buffer)
-        .expect("Failed to deflate payload");
-
-    // Assert
-    assert_eq!(
-        output_buffer, expected_output,
-        "Decompressed buffer did not match expected output"
-    );
+fn test_fixed_huffman_shakespeare() -> io::Result<()> {
+    run_decompression(
+        "tests/data/fixed/shakespeare.txt.gz",
+        "tests/data/original/shakespeare.txt",
+    )
 }
 
 #[test]
-fn test_no_compr_shakespeare() {
-    // Arrange
-    let archive_path = "tests/data/nocompr/shakespeare.txt.gz";
-    let expected_text_path = "tests/data/original/shakespeare.txt";
+fn test_no_compr_random() -> io::Result<()> {
+    run_decompression(
+        "tests/data/nocompr/large_random.txt.gz",
+        "tests/data/original/large_random.txt",
+    )
+}
 
-    let compressed_data = fs::read(archive_path).expect("Failed to read compressed file");
-    let expected_output = fs::read(expected_text_path).expect("Failed to read expected text file");
-
-    let cursor = Cursor::new(compressed_data);
-    let mut ext = Extractor::new(cursor);
-
-    let _ = ext.process_header();
-
-    // Act
-    let mut output_buffer = Vec::new();
-    ext.deflate(&mut output_buffer)
-        .expect("Failed to deflate payload");
-
-    // Assert
-    assert_eq!(
-        output_buffer, expected_output,
-        "Decompressed buffer did not match expected output"
-    );
+#[test]
+fn test_no_compr_shakespeare() -> io::Result<()> {
+    run_decompression(
+        "tests/data/nocompr/shakespeare.txt.gz",
+        "tests/data/original/shakespeare.txt",
+    )
 }
