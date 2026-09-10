@@ -11,6 +11,10 @@ pub struct CliArgs {
     #[arg(short = 'd', long = "decompress")]
     pub decompress: bool,
 
+    /// force overwrite of output file and compress links
+    #[arg(short = 'f', long = "force")]
+    pub force: bool,
+
     /// keep (don't delete) input files
     #[arg(short = 'k', long = "keep")]
     pub keep_input: bool,
@@ -22,10 +26,10 @@ pub struct CliArgs {
     #[command(flatten)]
     pub compr_lvl: CompressionLevel,
 
-    #[arg(action = ArgAction::Help, help = "give this help")]
+    #[arg(short = 'h', long = "help", action = ArgAction::Help, help = "give this help")]
     help: Option<bool>,
 
-    #[arg(short = 'V', action = ArgAction::Version, help = "display version number")]
+    #[arg(short = 'V', long = "version", action = ArgAction::Version, help = "display version number")]
     version: Option<bool>,
 }
 
